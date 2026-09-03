@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, UserPlus } from "lucide-react";
+import { Loader2, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -74,6 +74,20 @@ function AgentsPage() {
     qc.invalidateQueries({ queryKey: ["agents"] });
   };
 
+  const deleteAgent = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete agent "${name}"? This action cannot be undone.`)) return;
+    // Unassign their leads
+    await supabase.from("leads").update({ assigned_to: null }).eq("assigned_to", id);
+    // Remove role
+    await supabase.from("user_roles").delete().eq("user_id", id);
+    // Remove profile
+    const { error } = await supabase.from("profiles").delete().eq("id", id);
+    if (error) return toast.error(error.message);
+    toast.success("Agent deleted");
+    qc.invalidateQueries({ queryKey: ["agents"] });
+    qc.invalidateQueries({ queryKey: ["agent-lead-counts"] });
+  };
+
   return (
     <>
       <PageHeader
@@ -124,9 +138,14 @@ function AgentsPage() {
 
             <div className="mt-3 flex items-center justify-between border-t pt-3 text-xs">
               <span className="text-muted-foreground">Assigned leads: <strong className="text-foreground">{counts[a.id] ?? 0}</strong></span>
-              <Button size="sm" variant="outline" className="h-8 text-xs font-semibold" onClick={() => toggleActive(a.id, !a.is_active)}>
-                {a.is_active ? "Deactivate" : "Activate"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" className="h-8 text-xs font-semibold" onClick={() => toggleActive(a.id, !a.is_active)}>
+                  {a.is_active ? "Deactivate" : "Activate"}
+                </Button>
+                <Button size="sm" variant="outline" className="h-8 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 border-rose-500/30" onClick={() => deleteAgent(a.id, a.full_name || a.email)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
           </div>
         ))}
@@ -153,9 +172,19 @@ function AgentsPage() {
                 <td className="px-4 py-3">{counts[a.id] ?? 0}</td>
                 <td className="px-4 py-3"><StatusBadge label={a.is_active ? "Active" : "Suspended"} /></td>
                 <td className="px-4 py-3">
-                  <Button size="sm" variant="outline" onClick={() => toggleActive(a.id, !a.is_active)}>
-                    {a.is_active ? "Deactivate" : "Activate"}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={() => toggleActive(a.id, !a.is_active)}>
+                      {a.is_active ? "Deactivate" : "Activate"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-rose-500 hover:bg-rose-500/10 hover:text-rose-600 border-rose-500/30"
+                      onClick={() => deleteAgent(a.id, a.full_name || a.email)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}
