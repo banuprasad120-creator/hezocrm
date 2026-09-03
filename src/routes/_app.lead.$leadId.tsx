@@ -144,6 +144,11 @@ function LeadDetail() {
                 {interestedData.employer && (
                   <p className="text-muted-foreground">Employer: {interestedData.employer}</p>
                 )}
+                {interestedData.serviceYears && (
+                  <p className="text-muted-foreground font-medium">
+                    Service Experience: <strong>{interestedData.serviceYears} Year(s)</strong>
+                  </p>
+                )}
               </div>
 
               {/* Loans */}

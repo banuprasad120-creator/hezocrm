@@ -16,6 +16,7 @@ export interface InterestedLeadData {
   requiredAmount?: string;
   monthlyIncome?: string;
   employer?: string;
+  serviceYears?: string; // Years in service / work experience
   hasExistingLoans: boolean;
   loansCount: number;
   loans: ExistingLoan[];
@@ -98,6 +99,9 @@ export function serializeInterestedData(data: InterestedLeadData, userNotes?: st
   }
   if (data.employer) {
     summary += `• Employer: ${data.employer}\n`;
+  }
+  if (data.serviceYears) {
+    summary += `• Service Years / Work Experience: ${data.serviceYears} Year(s)\n`;
   }
   if (userNotes?.trim()) {
     summary += `• Remarks: ${userNotes.trim()}\n`;

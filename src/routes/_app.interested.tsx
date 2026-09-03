@@ -140,9 +140,10 @@ function InterestedLeadsPage() {
 
     const headers = [
       "Customer Name", "Mobile", "City", "Service Required", "Required Amount",
+      "Service Years", "Employer", "Monthly Income",
       "Existing Loans Count", "Existing Loans Details",
       "Credit Cards Count", "Credit Cards Details",
-      "Monthly Income", "Employer", "Assigned Agent", "Folder Date", "Last Call Date", "Notes"
+      "Assigned Agent", "Folder Date", "Last Call Date", "Notes"
     ];
 
     const rows = filteredLeads.map((l) => {
@@ -156,12 +157,13 @@ function InterestedLeadsPage() {
         `"${l.city || ""}"`,
         `"${l.loan_type}"`,
         `"${l.loan_amount || ""}"`,
+        `"${data?.serviceYears || ""}"`,
+        `"${l.employer || ""}"`,
+        `"${l.monthly_income || ""}"`,
         `"${data?.loans?.length || 0}"`,
         `"${loanDetails.replace(/"/g, '""')}"`,
         `"${data?.creditCards?.length || 0}"`,
         `"${cardDetails.replace(/"/g, '""')}"`,
-        `"${l.monthly_income || ""}"`,
-        `"${l.employer || ""}"`,
         `"${l.agentName}"`,
         `"${l.folder_date}"`,
         `"${l.last_call_at ? formatDateTime(l.last_call_at) : ""}"`,
@@ -347,6 +349,19 @@ function InterestedLeadsPage() {
                           <p className="text-xs text-muted-foreground">No active credit cards reported by customer.</p>
                         )}
                       </div>
+
+                      {/* Service Years & Employment Info */}
+                      {(data?.serviceYears || lead.employer || lead.monthly_income) && (
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground bg-muted/20 rounded-xl p-2.5">
+                          {data?.serviceYears && (
+                            <span className="font-semibold text-foreground flex items-center gap-1">
+                              💼 Service: <strong className="text-brand">{data.serviceYears} Year(s)</strong>
+                            </span>
+                          )}
+                          {lead.employer && <span>🏢 {lead.employer}</span>}
+                          {lead.monthly_income && <span>💰 ₹{Number(lead.monthly_income).toLocaleString("en-IN")}/mo</span>}
+                        </div>
+                      )}
 
                       {/* Notes / Remarks */}
                       {data?.notes && (

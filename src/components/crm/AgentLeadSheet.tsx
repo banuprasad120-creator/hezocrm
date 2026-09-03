@@ -143,6 +143,11 @@ export function AgentLeadSheet({
                       Income: ₹{Number(interestedData.monthlyIncome).toLocaleString("en-IN")}/mo {interestedData.employer ? `(${interestedData.employer})` : ""}
                     </p>
                   )}
+                  {interestedData.serviceYears && (
+                    <p className="text-muted-foreground">
+                      Experience: <strong>{interestedData.serviceYears} Year(s) in Service</strong>
+                    </p>
+                  )}
                 </div>
 
                 {/* Existing Loans */}

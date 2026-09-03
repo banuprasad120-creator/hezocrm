@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Building2, CreditCard, Flame, Landmark, Loader2, Plus, Trash2,
-  CalendarClock, CheckCircle2, User, Phone, MapPin, IndianRupee,
+  CalendarClock, CheckCircle2, User, Phone, MapPin, Briefcase, Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,7 +19,7 @@ import {
   CARD_ISSUERS, TOP_BANKS, parseInterestedData, serializeInterestedData,
   type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
-import { LOAN_TYPES, inr, type Lead } from "@/lib/crm";
+import { LOAN_TYPES, type Lead } from "@/lib/crm";
 
 interface InterestedLeadDialogProps {
   lead: Lead | null;
@@ -40,6 +40,7 @@ export function InterestedLeadDialog({
   const [requiredAmount, setRequiredAmount] = useState("");
   const [monthlyIncome, setMonthlyIncome] = useState("");
   const [employer, setEmployer] = useState("");
+  const [serviceYears, setServiceYears] = useState("");
 
   // Existing Loans
   const [hasExistingLoans, setHasExistingLoans] = useState(false);
@@ -64,6 +65,7 @@ export function InterestedLeadDialog({
         setRequiredAmount(parsed.requiredAmount || (lead.loan_amount ? String(lead.loan_amount) : ""));
         setMonthlyIncome(parsed.monthlyIncome || (lead.monthly_income ? String(lead.monthly_income) : ""));
         setEmployer(parsed.employer || lead.employer || "");
+        setServiceYears(parsed.serviceYears || "");
         setHasExistingLoans(parsed.hasExistingLoans);
         setLoans(parsed.loans || []);
         setHasCreditCards(parsed.hasCreditCards);
@@ -74,6 +76,7 @@ export function InterestedLeadDialog({
         setRequiredAmount(lead.loan_amount ? String(lead.loan_amount) : "");
         setMonthlyIncome(lead.monthly_income ? String(lead.monthly_income) : "");
         setEmployer(lead.employer || "");
+        setServiceYears("");
         setHasExistingLoans(false);
         setLoans([{ bank: "HDFC Bank", loanType: "Personal Loan", amount: "", emi: "" }]);
         setHasCreditCards(false);
@@ -88,10 +91,15 @@ export function InterestedLeadDialog({
 
   // Handlers for Loans
   const addLoan = () => {
+    setHasExistingLoans(true);
     setLoans((prev) => [...prev, { bank: "HDFC Bank", loanType: "Personal Loan", amount: "", emi: "" }]);
   };
   const removeLoan = (index: number) => {
-    setLoans((prev) => prev.filter((_, i) => i !== index));
+    setLoans((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) setHasExistingLoans(false);
+      return next;
+    });
   };
   const updateLoan = (index: number, field: keyof ExistingLoan, value: string) => {
     setLoans((prev) => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
@@ -99,10 +107,15 @@ export function InterestedLeadDialog({
 
   // Handlers for Credit Cards
   const addCreditCard = () => {
+    setHasCreditCards(true);
     setCreditCards((prev) => [...prev, { bank: "HDFC Bank", limit: "", outstanding: "" }]);
   };
   const removeCreditCard = (index: number) => {
-    setCreditCards((prev) => prev.filter((_, i) => i !== index));
+    setCreditCards((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) setHasCreditCards(false);
+      return next;
+    });
   };
   const updateCreditCard = (index: number, field: keyof ExistingCreditCard, value: string) => {
     setCreditCards((prev) => prev.map((c, i) => (i === index ? { ...c, [field]: value } : c)));
@@ -118,6 +131,7 @@ export function InterestedLeadDialog({
         requiredAmount: requiredAmount || undefined,
         monthlyIncome: monthlyIncome || undefined,
         employer: employer || undefined,
+        serviceYears: serviceYears.trim() || undefined,
         hasExistingLoans,
         loansCount: hasExistingLoans ? loans.length : 0,
         loans: hasExistingLoans ? loans : [],
@@ -154,7 +168,7 @@ export function InterestedLeadDialog({
         call_result: "Connected",
         customer_response: "Interested",
         status: "Interested",
-        notes: `Customer accepted service: ${serviceRequired}. ${hasExistingLoans ? `${loans.length} loans` : "No loans"}, ${hasCreditCards ? `${creditCards.length} cards` : "No cards"}. ${notes || ""}`,
+        notes: `Customer accepted service: ${serviceRequired}. ${hasExistingLoans ? `${loans.length} loans` : "No loans"}, ${hasCreditCards ? `${creditCards.length} cards` : "No cards"}. Experience: ${serviceYears || "N/A"} yrs. ${notes || ""}`,
       });
       if (callErr) console.warn("Call history note error:", callErr);
 
@@ -196,7 +210,7 @@ export function InterestedLeadDialog({
             <div>
               <DialogTitle className="text-lg font-bold">Customer Accepted Service</DialogTitle>
               <DialogDescription className="text-xs">
-                Capture existing loans, bank names, and credit card details for this customer.
+                Capture existing loans, bank names, credit card details, and service years.
               </DialogDescription>
             </div>
           </div>
@@ -219,10 +233,10 @@ export function InterestedLeadDialog({
         )}
 
         <div className="space-y-6 pt-2">
-          {/* SECTION 1: Required Service */}
+          {/* SECTION 1: Required Service & Employment */}
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-brand flex items-center gap-1.5">
-              <Landmark className="h-4 w-4" /> 1. Service Requirement
+              <Landmark className="h-4 w-4" /> 1. Requirement & Employment Details
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
@@ -272,6 +286,25 @@ export function InterestedLeadDialog({
                   className="h-9 text-xs"
                 />
               </div>
+
+              {/* Service Years of Employee / Applicant */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs flex items-center gap-1">
+                  <Briefcase className="h-3.5 w-3.5 text-brand" /> Service Years / Work Experience
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    placeholder="e.g. 3.5"
+                    value={serviceYears}
+                    onChange={(e) => setServiceYears(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                  <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Years in Service</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -285,7 +318,15 @@ export function InterestedLeadDialog({
                 <p className="text-[11px] text-muted-foreground">Does the customer currently have loans from any bank?</p>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold">{hasExistingLoans ? "YES" : "NO"}</span>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={addLoan}
+                  className="h-7 text-xs font-bold text-amber-500 hover:bg-amber-500/10 border-amber-500/30"
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add Loan (+)
+                </Button>
                 <Switch
                   checked={hasExistingLoans}
                   onCheckedChange={(checked) => {
@@ -302,8 +343,8 @@ export function InterestedLeadDialog({
               <div className="space-y-3 pt-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground border-b pb-1">
                   <span>List of existing loans ({loans.length})</span>
-                  <Button size="sm" variant="outline" onClick={addLoan} className="h-7 text-xs">
-                    <Plus className="mr-1 h-3 w-3" /> Add Another Loan
+                  <Button size="sm" variant="outline" onClick={addLoan} className="h-7 text-xs font-bold text-amber-600 bg-amber-500/10 hover:bg-amber-500/20">
+                    <Plus className="mr-1 h-3.5 w-3.5" /> + Add Another Loan
                   </Button>
                 </div>
 
@@ -372,6 +413,16 @@ export function InterestedLeadDialog({
                     </div>
                   </div>
                 ))}
+
+                {/* Big Plus Button to Add Another Loan */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addLoan}
+                  className="w-full h-10 border-dashed border-amber-500/40 text-amber-500 font-bold hover:bg-amber-500/10 text-xs"
+                >
+                  <Plus className="mr-1.5 h-4 w-4" /> + Add Another Loan
+                </Button>
               </div>
             )}
           </div>
@@ -386,7 +437,15 @@ export function InterestedLeadDialog({
                 <p className="text-[11px] text-muted-foreground">Does the customer have credit cards from any bank?</p>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold">{hasCreditCards ? "YES" : "NO"}</span>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={addCreditCard}
+                  className="h-7 text-xs font-bold text-sky-500 hover:bg-sky-500/10 border-sky-500/30"
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add Card (+)
+                </Button>
                 <Switch
                   checked={hasCreditCards}
                   onCheckedChange={(checked) => {
@@ -403,8 +462,8 @@ export function InterestedLeadDialog({
               <div className="space-y-3 pt-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground border-b pb-1">
                   <span>List of credit cards ({creditCards.length})</span>
-                  <Button size="sm" variant="outline" onClick={addCreditCard} className="h-7 text-xs">
-                    <Plus className="mr-1 h-3 w-3" /> Add Another Card
+                  <Button size="sm" variant="outline" onClick={addCreditCard} className="h-7 text-xs font-bold text-sky-600 bg-sky-500/10 hover:bg-sky-500/20">
+                    <Plus className="mr-1 h-3.5 w-3.5" /> + Add Another Card
                   </Button>
                 </div>
 
@@ -461,6 +520,16 @@ export function InterestedLeadDialog({
                     </div>
                   </div>
                 ))}
+
+                {/* Big Plus Button to Add Another Card */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addCreditCard}
+                  className="w-full h-10 border-dashed border-sky-500/40 text-sky-500 font-bold hover:bg-sky-500/10 text-xs"
+                >
+                  <Plus className="mr-1.5 h-4 w-4" /> + Add Another Credit Card
+                </Button>
               </div>
             )}
           </div>
