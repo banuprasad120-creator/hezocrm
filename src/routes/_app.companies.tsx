@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  createCompany, createCompanyAgent, listCompanies, setAgentActive, setCompanyStatus,
+  createCompany, createCompanyAgent, setAgentActive, setCompanyStatus,
   type CompanyOverview,
 } from "@/lib/companies.functions";
 
@@ -281,37 +281,9 @@ function CompaniesPage() {
 function NewCompanyDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (v: boolean) => void; onDone: () => void }) {
   const [form, setForm] = useState({ companyName: "", plan: "Starter", adminName: "", adminEmail: "", adminPassword: "" });
   const m = useMutation({
-    mutationFn: async () => {
-      try {
-        return await createCompany({ data: form });
-      } catch (err) {
-        console.warn("[companies] Server function fallback for createCompany", err);
-        // Fallback for dev mode client-side execution using current authenticated session or standard client insert
-        const { data: company, error: cErr } = await supabase
-          .from("companies").insert({ name: form.companyName, plan: form.plan }).select("id").single();
-        if (cErr) throw new Error(cErr.message);
-
-        const { data: authData, error: uErr } = await supabase.auth.signUp({
-          email: form.adminEmail,
-          password: form.adminPassword,
-          options: { data: { full_name: form.adminName } },
-        });
-        if (uErr || !authData.user) throw new Error(uErr?.message ?? "Could not create company admin");
-
-        await supabase.from("profiles").upsert({
-          id: authData.user.id, company_id: company.id, full_name: form.adminName, email: form.adminEmail,
-        });
-
-        await supabase.from("user_roles").upsert(
-          { user_id: authData.user.id, role: "company_admin", company_id: company.id },
-          { onConflict: "user_id,role" },
-        );
-
-        return { companyId: company.id };
-      }
-    },
+    mutationFn: () => createCompany({ data: form }),
     onSuccess: () => {
-      toast.success("Company created with its admin");
+      toast.success("Company created successfully!");
       setForm({ companyName: "", plan: "Starter", adminName: "", adminEmail: "", adminPassword: "" });
       onOpenChange(false);
       onDone();
