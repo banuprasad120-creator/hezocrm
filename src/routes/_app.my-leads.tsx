@@ -1,14 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, CheckCircle2, Clock, Flame, Loader2, MessageCircle,
-  PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff,
+  PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff, Zap, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { StatCard } from "@/components/common/StatCard";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
@@ -32,10 +33,13 @@ export const Route = createFileRoute("/_app/my-leads")({
 function MyLeads() {
   const { data: session } = useCrmSession();
   const userId = session?.userId ?? null;
+  const companyId = session?.companyId ?? null;
   const qc = useQueryClient();
   const [active, setActive] = useState<Lead | null>(null);
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
+  const [autoRefill, setAutoRefill] = useState(true);
+  const [claiming, setClaiming] = useState(false);
 
   /* ── Fetch all assigned leads ── */
   const { data: leads = [], isLoading, refetch } = useQuery({
@@ -156,14 +160,109 @@ function MyLeads() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const isBusy = outOfServiceM.isPending || interestedM.isPending;
+  /* ── Automated / On-demand Lead Claiming & Assignment ── */
+  const claimNextLeads = async (count = 10, isAutomatic = false) => {
+    if (!companyId || !userId || claiming) return;
+    setClaiming(true);
+    try {
+      // 1. Find unassigned leads in this company (from latest folder)
+      const { data: unassigned, error } = await supabase
+        .from("leads")
+        .select("id, mobile")
+        .eq("company_id", companyId)
+        .is("assigned_to", null)
+        .order("folder_date", { ascending: false })
+        .order("created_at", { ascending: true })
+        .limit(count * 3);
+
+      if (error) throw error;
+      if (!unassigned || unassigned.length === 0) {
+        if (!isAutomatic) toast.info("No unassigned leads available in company folders right now.");
+        return;
+      }
+
+      // Deduplicate by clean mobile number
+      const seen = new Set<string>();
+      const idsToClaim: string[] = [];
+      for (const item of unassigned) {
+        const cleanMob = (item.mobile || "").replace(/\D/g, "").slice(-10);
+        if (cleanMob) {
+          if (!seen.has(cleanMob)) {
+            seen.add(cleanMob);
+            idsToClaim.push(item.id);
+            if (idsToClaim.length >= count) break;
+          }
+        } else {
+          idsToClaim.push(item.id);
+          if (idsToClaim.length >= count) break;
+        }
+      }
+
+      if (idsToClaim.length === 0) {
+        if (!isAutomatic) toast.info("No unique leads available right now.");
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const { error: updErr } = await supabase
+        .from("leads")
+        .update({ assigned_to: userId, assigned_at: now, status: "Assigned" })
+        .in("id", idsToClaim)
+        .eq("company_id", companyId);
+      if (updErr) throw updErr;
+
+      // Record lead assignments history
+      await supabase.from("lead_assignments").upsert(
+        idsToClaim.map((id) => ({
+          lead_id: id,
+          company_id: companyId,
+          employee_id: userId,
+          assigned_by: userId,
+        })),
+        { onConflict: "lead_id" }
+      );
+
+      toast.success(`⚡ Automated refill: ${idsToClaim.length} new leads assigned to your queue!`);
+      await qc.invalidateQueries({ queryKey: ["my-leads"] });
+    } catch (err) {
+      console.error("Auto claim error:", err);
+      if (!isAutomatic) toast.error(err instanceof Error ? err.message : "Failed to claim leads");
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  // Automated trigger: When an agent finishes all pending leads, auto-assign next 10 leads!
+  useEffect(() => {
+    if (!isLoading && leads.length > 0 && pendingLeads.length === 0 && autoRefill && !claiming) {
+      claimNextLeads(10, true);
+    }
+  }, [isLoading, leads.length, pendingLeads.length, autoRefill]);
+
+  const isBusy = outOfServiceM.isPending || interestedM.isPending || claiming;
 
   return (
     <>
       <PageHeader
         title="My Leads"
         description={`${stats.pending} pending · ${stats.called} called · ${stats.assigned} total`}
-        actions={<Button variant="outline" size="sm" onClick={() => refetch()}><RefreshCw className="mr-1 h-4 w-4" /> Refresh</Button>}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={claiming}
+              onClick={() => claimNextLeads(10, false)}
+              className="h-9 font-bold border-brand/40 text-brand hover:bg-brand/10"
+            >
+              {claiming ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1 h-3.5 w-3.5 fill-brand" />}
+              Fetch +10 Leads
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => refetch()} className="h-9">
+              <RefreshCw className="mr-1 h-4 w-4" /> Refresh
+            </Button>
+          </div>
+        }
       />
 
       {/* Stats row */}
@@ -185,9 +284,15 @@ function MyLeads() {
           {/* ── Current Lead Card (ONE at a time) ── */}
           {currentLead ? (
             <div className="mt-6">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Current Lead — {pendingLeads.length} remaining
-              </p>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Current Lead — {pendingLeads.length} remaining
+                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>⚡ Auto-Refill:</span>
+                  <Switch checked={autoRefill} onCheckedChange={setAutoRefill} className="scale-75" />
+                </div>
+              </div>
               <LeadCard
                 lead={currentLead}
                 followUp={followUpByLead.get(currentLead.id)}
@@ -199,12 +304,43 @@ function MyLeads() {
               />
             </div>
           ) : (
-            <div className="mt-6 flex flex-col items-center justify-center rounded-2xl border bg-card p-12 text-center card-elevated">
-              <CheckCircle2 className="mb-3 h-10 w-10 text-success" />
-              <p className="text-lg font-bold text-foreground">All done for now! 🎉</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                You've worked through all pending leads. Your admin will assign more soon.
-              </p>
+            <div className="mt-6 flex flex-col items-center justify-center rounded-2xl border bg-card p-10 text-center card-elevated space-y-4">
+              <div className="grid h-16 w-16 place-items-center rounded-2xl bg-success/15 text-success">
+                {claiming ? <Loader2 className="h-8 w-8 animate-spin" /> : <CheckCircle2 className="h-8 w-8" />}
+              </div>
+              <div>
+                <p className="text-xl font-extrabold text-foreground">
+                  {claiming ? "Fetching New Leads Automatically… ⚡" : "All Assigned Leads Completed! 🎉"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
+                  {claiming
+                    ? "Pulling the next batch of fresh unassigned leads for you right now."
+                    : "Great job! Click below to pull the next unassigned batch or keep auto-refill enabled."}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                <Button
+                  onClick={() => claimNextLeads(10, false)}
+                  disabled={claiming}
+                  className="gradient-brand text-white font-bold h-11 px-5 shadow-md"
+                >
+                  <Zap className="mr-2 h-4 w-4 fill-white" /> Claim Next 10 Leads
+                </Button>
+                <Button
+                  onClick={() => claimNextLeads(25, false)}
+                  disabled={claiming}
+                  variant="outline"
+                  className="font-bold h-11 px-5 border-brand/40 text-brand hover:bg-brand/10"
+                >
+                  <Sparkles className="mr-2 h-4 w-4" /> Claim Next 25 Leads
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-muted-foreground pt-2 border-t">
+                <span>⚡ Auto-refill next leads on completion:</span>
+                <Switch checked={autoRefill} onCheckedChange={setAutoRefill} />
+              </div>
             </div>
           )}
 
