@@ -140,6 +140,7 @@ function InterestedLeadsPage() {
 
     const headers = [
       "Customer Name", "Mobile", "City", "Service Required", "Required Amount",
+      "CIBIL Score", "Employment Type", "Salary Bank Account", "Other Bank Accounts",
       "Service Years", "Employer", "Monthly Income",
       "Existing Loans Count", "Existing Loans Details",
       "Credit Cards Count", "Credit Cards Details",
@@ -150,6 +151,7 @@ function InterestedLeadsPage() {
       const data = l.interestedData;
       const loanDetails = data?.loans?.map((ln) => `${ln.bank} (${ln.loanType}${ln.amount ? `: Rs.${ln.amount}` : ""})`).join("; ") || "None";
       const cardDetails = data?.creditCards?.map((cd) => `${cd.bank}${cd.limit ? ` (Limit: Rs.${cd.limit})` : ""}`).join("; ") || "None";
+      const otherAccounts = data?.bankAccounts?.join("; ") || "None";
 
       return [
         `"${l.customer_name.replace(/"/g, '""')}"`,
@@ -157,6 +159,10 @@ function InterestedLeadsPage() {
         `"${l.city || ""}"`,
         `"${l.loan_type}"`,
         `"${l.loan_amount || ""}"`,
+        `"${data?.cibilScore || ""}"`,
+        `"${data?.employmentType || l.employment_type || ""}"`,
+        `"${data?.salaryBank || ""}"`,
+        `"${otherAccounts.replace(/"/g, '""')}"`,
         `"${data?.serviceYears || ""}"`,
         `"${l.employer || ""}"`,
         `"${l.monthly_income || ""}"`,
@@ -285,11 +291,16 @@ function InterestedLeadsPage() {
                     {/* Header */}
                     <div className="flex items-start justify-between gap-2 border-b pb-3">
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-extrabold text-base text-foreground">{lead.customer_name}</span>
                           <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-bold text-success flex items-center gap-1">
                             <Flame className="h-3 w-3 fill-success" /> Interested
                           </span>
+                          {data?.cibilScore && (
+                            <span className="rounded-full bg-indigo-500/15 border border-indigo-500/30 px-2 py-0.5 text-[11px] font-bold text-indigo-500">
+                              🛡️ CIBIL: {data.cibilScore}
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           📞 {lead.mobile} {lead.city ? `· 📍 ${lead.city}` : ""}
@@ -350,9 +361,19 @@ function InterestedLeadsPage() {
                         )}
                       </div>
 
-                      {/* Service Years & Employment Info */}
-                      {(data?.serviceYears || lead.employer || lead.monthly_income) && (
+                      {/* Employment, Banking & Service Years Info */}
+                      {(data?.serviceYears || data?.salaryBank || data?.employmentType || lead.employer || lead.monthly_income) && (
                         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground bg-muted/20 rounded-xl p-2.5">
+                          {data?.employmentType && (
+                            <span className="font-semibold text-foreground">
+                              👔 {data.employmentType}
+                            </span>
+                          )}
+                          {data?.salaryBank && (
+                            <span className="font-semibold text-indigo-500">
+                              🏦 Salary A/C: {data.salaryBank}
+                            </span>
+                          )}
                           {data?.serviceYears && (
                             <span className="font-semibold text-foreground flex items-center gap-1">
                               💼 Service: <strong className="text-brand">{data.serviceYears} Year(s)</strong>
@@ -360,6 +381,11 @@ function InterestedLeadsPage() {
                           )}
                           {lead.employer && <span>🏢 {lead.employer}</span>}
                           {lead.monthly_income && <span>💰 ₹{Number(lead.monthly_income).toLocaleString("en-IN")}/mo</span>}
+                          {data?.bankAccounts && data.bankAccounts.length > 0 && (
+                            <span className="text-[11px] text-muted-foreground">
+                              · Accounts: {data.bankAccounts.join(", ")}
+                            </span>
+                          )}
                         </div>
                       )}
 

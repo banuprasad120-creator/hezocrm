@@ -138,6 +138,20 @@ function LeadDetail() {
                 {interestedData.requiredAmount && (
                   <p className="text-foreground">Required Amount: <strong>{inr(Number(interestedData.requiredAmount))}</strong></p>
                 )}
+                {interestedData.cibilScore && (
+                  <p className="text-foreground font-semibold">
+                    🛡️ CIBIL / Credit Score: <strong className="text-indigo-500">{interestedData.cibilScore}</strong>
+                  </p>
+                )}
+                {interestedData.employmentType && (
+                  <p className="text-muted-foreground">Employment: <strong>{interestedData.employmentType}</strong></p>
+                )}
+                {interestedData.salaryBank && (
+                  <p className="text-indigo-600 font-semibold">🏦 Salary Bank: <strong>{interestedData.salaryBank}</strong></p>
+                )}
+                {interestedData.bankAccounts && interestedData.bankAccounts.length > 0 && (
+                  <p className="text-muted-foreground text-[11px]">Other Accounts: {interestedData.bankAccounts.join(", ")}</p>
+                )}
                 {interestedData.monthlyIncome && (
                   <p className="text-muted-foreground">Monthly Income: ₹{Number(interestedData.monthlyIncome).toLocaleString("en-IN")}</p>
                 )}

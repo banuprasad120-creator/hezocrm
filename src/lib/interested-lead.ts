@@ -14,6 +14,10 @@ export interface ExistingCreditCard {
 export interface InterestedLeadData {
   serviceRequired: string;
   requiredAmount?: string;
+  employmentType?: string; // Salaried, Self-Employed, Business, etc.
+  salaryBank?: string; // Salary Bank Account for Salaried
+  bankAccounts?: string[]; // Active Bank Accounts held by customer
+  cibilScore?: string; // CIBIL / Credit Score
   monthlyIncome?: string;
   employer?: string;
   serviceYears?: string; // Years in service / work experience
@@ -94,6 +98,18 @@ export function serializeInterestedData(data: InterestedLeadData, userNotes?: st
     summary += `• Credit Cards: None\n`;
   }
 
+  if (data.cibilScore) {
+    summary += `• CIBIL / Credit Score: ${data.cibilScore}\n`;
+  }
+  if (data.employmentType) {
+    summary += `• Employment Type: ${data.employmentType}\n`;
+  }
+  if (data.salaryBank) {
+    summary += `• Salary Account Bank: ${data.salaryBank}\n`;
+  }
+  if (data.bankAccounts && data.bankAccounts.length > 0) {
+    summary += `• Other Bank Accounts: ${data.bankAccounts.join(", ")}\n`;
+  }
   if (data.monthlyIncome) {
     summary += `• Monthly Income: ₹${Number(data.monthlyIncome).toLocaleString("en-IN")}\n`;
   }

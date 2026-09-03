@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   Building2, CreditCard, Flame, Landmark, Loader2, Plus, Trash2,
-  CalendarClock, CheckCircle2, User, Phone, MapPin, Briefcase, Clock,
+  CalendarClock, CheckCircle2, User, Phone, MapPin, Briefcase,
+  ShieldCheck, Wallet, Sparkles, Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -35,12 +36,18 @@ export function InterestedLeadDialog({
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
 
-  // Form State
+  // Requirement State
   const [serviceRequired, setServiceRequired] = useState("Personal Loan");
   const [requiredAmount, setRequiredAmount] = useState("");
+
+  // Employment & Banking Profile
+  const [employmentType, setEmploymentType] = useState("Salaried");
+  const [salaryBank, setSalaryBank] = useState("HDFC Bank");
+  const [bankAccounts, setBankAccounts] = useState<string[]>([]);
   const [monthlyIncome, setMonthlyIncome] = useState("");
   const [employer, setEmployer] = useState("");
   const [serviceYears, setServiceYears] = useState("");
+  const [cibilScore, setCibilScore] = useState("");
 
   // Existing Loans
   const [hasExistingLoans, setHasExistingLoans] = useState(false);
@@ -63,6 +70,10 @@ export function InterestedLeadDialog({
       if (parsed) {
         setServiceRequired(parsed.serviceRequired || lead.loan_type || "Personal Loan");
         setRequiredAmount(parsed.requiredAmount || (lead.loan_amount ? String(lead.loan_amount) : ""));
+        setEmploymentType(parsed.employmentType || (lead.employment_type as string) || "Salaried");
+        setSalaryBank(parsed.salaryBank || "HDFC Bank");
+        setBankAccounts(parsed.bankAccounts || []);
+        setCibilScore(parsed.cibilScore || "");
         setMonthlyIncome(parsed.monthlyIncome || (lead.monthly_income ? String(lead.monthly_income) : ""));
         setEmployer(parsed.employer || lead.employer || "");
         setServiceYears(parsed.serviceYears || "");
@@ -74,6 +85,10 @@ export function InterestedLeadDialog({
       } else {
         setServiceRequired(lead.loan_type || "Personal Loan");
         setRequiredAmount(lead.loan_amount ? String(lead.loan_amount) : "");
+        setEmploymentType((lead.employment_type as string) || "Salaried");
+        setSalaryBank("HDFC Bank");
+        setBankAccounts([]);
+        setCibilScore("");
         setMonthlyIncome(lead.monthly_income ? String(lead.monthly_income) : "");
         setEmployer(lead.employer || "");
         setServiceYears("");
@@ -88,6 +103,17 @@ export function InterestedLeadDialog({
       setFollowUpTime("");
     }
   }, [open, lead?.id]);
+
+  // Handlers for Other Bank Accounts
+  const addBankAccount = () => {
+    setBankAccounts((prev) => [...prev, "State Bank of India (SBI)"]);
+  };
+  const removeBankAccount = (index: number) => {
+    setBankAccounts((prev) => prev.filter((_, i) => i !== index));
+  };
+  const updateBankAccount = (index: number, bank: string) => {
+    setBankAccounts((prev) => prev.map((b, i) => (i === index ? bank : b)));
+  };
 
   // Handlers for Loans
   const addLoan = () => {
@@ -129,6 +155,10 @@ export function InterestedLeadDialog({
       const interestedData: InterestedLeadData = {
         serviceRequired,
         requiredAmount: requiredAmount || undefined,
+        employmentType: employmentType || undefined,
+        salaryBank: employmentType === "Salaried" ? salaryBank : undefined,
+        bankAccounts: bankAccounts.length > 0 ? bankAccounts : undefined,
+        cibilScore: cibilScore.trim() || undefined,
         monthlyIncome: monthlyIncome || undefined,
         employer: employer || undefined,
         serviceYears: serviceYears.trim() || undefined,
@@ -152,6 +182,7 @@ export function InterestedLeadDialog({
         status: "Interested",
         loan_type: serviceRequired || lead.loan_type,
         loan_amount: parsedReqAmount,
+        employment_type: employmentType || lead.employment_type,
         monthly_income: parsedIncome,
         employer: employer || lead.employer,
         notes: serializedNotes,
@@ -168,7 +199,7 @@ export function InterestedLeadDialog({
         call_result: "Connected",
         customer_response: "Interested",
         status: "Interested",
-        notes: `Customer accepted service: ${serviceRequired}. ${hasExistingLoans ? `${loans.length} loans` : "No loans"}, ${hasCreditCards ? `${creditCards.length} cards` : "No cards"}. Experience: ${serviceYears || "N/A"} yrs. ${notes || ""}`,
+        notes: `Customer accepted: ${serviceRequired} (₹${parsedReqAmount}). CIBIL: ${cibilScore || "N/A"}. Salary Bank: ${employmentType === "Salaried" ? salaryBank : "N/A"}. ${hasExistingLoans ? `${loans.length} loans` : "No loans"}, ${hasCreditCards ? `${creditCards.length} cards` : "No cards"}. Service Exp: ${serviceYears || "N/A"} yrs. ${notes || ""}`,
       });
       if (callErr) console.warn("Call history note error:", callErr);
 
@@ -185,7 +216,7 @@ export function InterestedLeadDialog({
       }
 
       toast.success("🎉 Customer Accepted Service! Lead saved to Interested.", {
-        description: `Logged ${hasExistingLoans ? `${loans.length} loan(s)` : "no loans"} and ${hasCreditCards ? `${creditCards.length} card(s)` : "no cards"}.`,
+        description: `Logged CIBIL (${cibilScore || "—"}), ${employmentType}, ${hasExistingLoans ? `${loans.length} loan(s)` : "no loans"}, ${hasCreditCards ? `${creditCards.length} card(s)` : "no cards"}.`,
       });
 
       await qc.invalidateQueries();
@@ -199,6 +230,15 @@ export function InterestedLeadDialog({
     }
   };
 
+  const getCibilTone = (score: string) => {
+    const num = Number(score);
+    if (!num) return "text-muted-foreground";
+    if (num >= 750) return "text-success font-bold";
+    if (num >= 700) return "text-sky-500 font-bold";
+    if (num >= 650) return "text-amber-500 font-bold";
+    return "text-destructive font-bold";
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-2xl">
@@ -210,7 +250,7 @@ export function InterestedLeadDialog({
             <div>
               <DialogTitle className="text-lg font-bold">Customer Accepted Service</DialogTitle>
               <DialogDescription className="text-xs">
-                Capture existing loans, bank names, credit card details, and service years.
+                Capture CIBIL score, salary bank accounts, service years, existing loans and credit cards.
               </DialogDescription>
             </div>
           </div>
@@ -233,10 +273,10 @@ export function InterestedLeadDialog({
         )}
 
         <div className="space-y-6 pt-2">
-          {/* SECTION 1: Required Service & Employment */}
+          {/* SECTION 1: Service Requirement */}
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-brand flex items-center gap-1.5">
-              <Landmark className="h-4 w-4" /> 1. Requirement & Employment Details
+              <Landmark className="h-4 w-4" /> 1. Service Requirement
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
@@ -265,9 +305,73 @@ export function InterestedLeadDialog({
                   className="h-9 text-xs"
                 />
               </div>
+            </div>
+          </div>
 
+          {/* SECTION 2: Employment, Banking & CIBIL Score */}
+          <div className="rounded-xl border bg-card p-4 space-y-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-indigo-500 flex items-center gap-1.5">
+              <Briefcase className="h-4 w-4" /> 2. Employment, Banking & CIBIL Profile
+            </p>
+            
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {/* Employment Type */}
               <div className="space-y-1.5">
-                <Label className="text-xs">Monthly Income (₹, optional)</Label>
+                <Label className="text-xs font-semibold">Employment Type</Label>
+                <Select value={employmentType} onValueChange={setEmploymentType}>
+                  <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Salaried">Salaried</SelectItem>
+                    <SelectItem value="Self-Employed">Self-Employed</SelectItem>
+                    <SelectItem value="Business Owner">Business Owner</SelectItem>
+                    <SelectItem value="Doctor / Professional">Doctor / Professional</SelectItem>
+                    <SelectItem value="Other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* CIBIL Score */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold flex items-center gap-1">
+                    <ShieldCheck className="h-3.5 w-3.5 text-success" /> CIBIL / Credit Score
+                  </Label>
+                  {cibilScore && (
+                    <span className={`text-[11px] ${getCibilTone(cibilScore)}`}>
+                      {Number(cibilScore) >= 750 ? "Excellent" : Number(cibilScore) >= 700 ? "Good" : Number(cibilScore) >= 650 ? "Average" : "Low"}
+                    </span>
+                  )}
+                </div>
+                <Input
+                  type="number"
+                  placeholder="e.g. 760 (300-900)"
+                  value={cibilScore}
+                  onChange={(e) => setCibilScore(e.target.value)}
+                  className="h-9 text-xs"
+                />
+              </div>
+
+              {/* Salary Bank (if Salaried) */}
+              {employmentType === "Salaried" && (
+                <div className="space-y-1.5 sm:col-span-2 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
+                  <Label className="text-xs font-bold text-indigo-600 flex items-center gap-1.5">
+                    <Wallet className="h-3.5 w-3.5" /> Salary Credit Bank Account
+                  </Label>
+                  <Select value={salaryBank} onValueChange={setSalaryBank}>
+                    <SelectTrigger className="h-9 text-xs bg-card"><SelectValue placeholder="Select salary bank" /></SelectTrigger>
+                    <SelectContent className="max-h-56">
+                      {TOP_BANKS.map((b) => (
+                        <SelectItem key={b} value={b}>{b}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">Bank where customer receives monthly salary credit.</p>
+                </div>
+              )}
+
+              {/* Monthly Income */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Monthly Net Income (₹)</Label>
                 <Input
                   type="number"
                   placeholder="e.g. 45000"
@@ -277,27 +381,28 @@ export function InterestedLeadDialog({
                 />
               </div>
 
+              {/* Employer / Business Name */}
               <div className="space-y-1.5">
-                <Label className="text-xs">Employer / Business Name (optional)</Label>
+                <Label className="text-xs">Employer / Company / Business Name</Label>
                 <Input
-                  placeholder="e.g. TCS / Self Employed"
+                  placeholder="e.g. Infosys / Private Ltd"
                   value={employer}
                   onChange={(e) => setEmployer(e.target.value)}
                   className="h-9 text-xs"
                 />
               </div>
 
-              {/* Service Years of Employee / Applicant */}
+              {/* Service Years / Experience */}
               <div className="space-y-1.5 sm:col-span-2">
-                <Label className="text-xs flex items-center gap-1">
-                  <Briefcase className="h-3.5 w-3.5 text-brand" /> Service Years / Work Experience
+                <Label className="text-xs flex items-center gap-1 font-semibold">
+                  <Clock className="h-3.5 w-3.5 text-brand" /> Employee Service Years / Total Work Experience
                 </Label>
                 <div className="flex items-center gap-2">
                   <Input
                     type="number"
                     step="0.5"
                     min="0"
-                    placeholder="e.g. 3.5"
+                    placeholder="e.g. 4.5"
                     value={serviceYears}
                     onChange={(e) => setServiceYears(e.target.value)}
                     className="h-9 text-xs"
@@ -305,15 +410,55 @@ export function InterestedLeadDialog({
                   <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">Years in Service</span>
                 </div>
               </div>
+
+              {/* Other Bank Accounts */}
+              <div className="space-y-2 sm:col-span-2 border-t pt-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
+                    <Building2 className="h-3.5 w-3.5" /> Other Active Bank Accounts ({bankAccounts.length})
+                  </Label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={addBankAccount}
+                    className="h-7 text-xs font-bold text-indigo-600 hover:bg-indigo-500/10 border-indigo-500/30"
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Add Bank Account (+)
+                  </Button>
+                </div>
+
+                {bankAccounts.map((accountBank, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Select value={accountBank} onValueChange={(v) => updateBankAccount(idx, v)}>
+                      <SelectTrigger className="h-8 text-xs flex-1"><SelectValue placeholder="Select bank" /></SelectTrigger>
+                      <SelectContent className="max-h-56">
+                        {TOP_BANKS.map((b) => (
+                          <SelectItem key={b} value={b}>{b}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      type="button"
+                      onClick={() => removeBankAccount(idx)}
+                      className="h-8 w-8 text-destructive hover:bg-destructive/10 shrink-0"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* SECTION 2: Existing Loans */}
+          {/* SECTION 3: Existing Loans */}
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
-                  <Building2 className="h-4 w-4" /> 2. Existing Loans
+                  <Building2 className="h-4 w-4" /> 3. Existing Loans
                 </p>
                 <p className="text-[11px] text-muted-foreground">Does the customer currently have loans from any bank?</p>
               </div>
@@ -427,12 +572,12 @@ export function InterestedLeadDialog({
             )}
           </div>
 
-          {/* SECTION 3: Existing Credit Cards */}
+          {/* SECTION 4: Existing Credit Cards */}
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wider text-sky-500 flex items-center gap-1.5">
-                  <CreditCard className="h-4 w-4" /> 3. Existing Credit Cards
+                  <CreditCard className="h-4 w-4" /> 4. Existing Credit Cards
                 </p>
                 <p className="text-[11px] text-muted-foreground">Does the customer have credit cards from any bank?</p>
               </div>
@@ -534,7 +679,7 @@ export function InterestedLeadDialog({
             )}
           </div>
 
-          {/* SECTION 4: Notes & Follow-up */}
+          {/* SECTION 5: Notes & Follow-up */}
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Agent Notes & Remarks</Label>
