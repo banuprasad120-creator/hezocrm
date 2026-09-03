@@ -20,7 +20,7 @@ import {
   CARD_ISSUERS, TOP_BANKS, parseInterestedData, serializeInterestedData,
   type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
-import { LOAN_TYPES, type Lead } from "@/lib/crm";
+import { LOAN_TYPES, addDaysISO, type Lead } from "@/lib/crm";
 
 interface InterestedLeadDialogProps {
   lead: Lead | null;
@@ -338,17 +338,34 @@ export function InterestedLeadDialog({
                   </Label>
                   {cibilScore && (
                     <span className={`text-[11px] ${getCibilTone(cibilScore)}`}>
-                      {Number(cibilScore) >= 750 ? "Excellent" : Number(cibilScore) >= 700 ? "Good" : Number(cibilScore) >= 650 ? "Average" : "Low"}
+                      {Number(cibilScore) === 0 ? "No CIBIL / 0" : Number(cibilScore) >= 750 ? "Excellent" : Number(cibilScore) >= 700 ? "Good" : Number(cibilScore) >= 650 ? "Average" : "Low"}
                     </span>
                   )}
                 </div>
-                <Input
-                  type="number"
-                  placeholder="e.g. 760 (300-900)"
-                  value={cibilScore}
-                  onChange={(e) => setCibilScore(e.target.value)}
-                  className="h-9 text-xs"
-                />
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    placeholder="e.g. 760 (300-900)"
+                    value={cibilScore}
+                    onChange={(e) => setCibilScore(e.target.value)}
+                    className="h-9 text-xs flex-1"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={cibilScore === "0" ? "default" : "outline"}
+                    onClick={() => {
+                      setCibilScore("0");
+                      setScheduleFollowUp(true);
+                      setFollowUpDate(addDaysISO(30));
+                      setNotes((prev) => prev ? `${prev} | No CIBIL - follow up in 1 month` : "No CIBIL score - follow up in 1 month");
+                      toast.info("Set to No CIBIL & scheduled 1-month follow-up (+30 days)");
+                    }}
+                    className="h-9 text-[11px] whitespace-nowrap px-2 font-bold"
+                  >
+                    No CIBIL (0)
+                  </Button>
+                </div>
               </div>
 
               {/* Salary Bank (if Salaried) */}
@@ -701,24 +718,57 @@ export function InterestedLeadDialog({
             </div>
 
             {scheduleFollowUp && (
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Follow-up Date</Label>
-                  <Input
-                    type="date"
-                    value={followUpDate}
-                    onChange={(e) => setFollowUpDate(e.target.value)}
-                    className="h-8 text-xs"
-                  />
+              <div className="space-y-2 pt-1">
+                <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                  <span className="text-[11px] text-muted-foreground font-semibold">Quick Presets:</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setFollowUpDate(addDaysISO(30)); setNotes((n) => n ? `${n} | 1-month follow-up` : "Recheck CIBIL & profile in 1 month"); }}
+                    className="h-6 px-2 text-[11px] font-bold text-indigo-500 bg-indigo-500/10 hover:bg-indigo-500/20"
+                  >
+                    +30 Days (1 Month)
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setFollowUpDate(addDaysISO(15))}
+                    className="h-6 px-2 text-[11px] font-semibold"
+                  >
+                    +15 Days
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setFollowUpDate(addDaysISO(7))}
+                    className="h-6 px-2 text-[11px] font-semibold"
+                  >
+                    +7 Days
+                  </Button>
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Follow-up Time</Label>
-                  <Input
-                    type="time"
-                    value={followUpTime}
-                    onChange={(e) => setFollowUpTime(e.target.value)}
-                    className="h-8 text-xs"
-                  />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Follow-up Date</Label>
+                    <Input
+                      type="date"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Follow-up Time</Label>
+                    <Input
+                      type="time"
+                      value={followUpTime}
+                      onChange={(e) => setFollowUpTime(e.target.value)}
+                      className="h-8 text-xs"
+                    />
+                  </div>
                 </div>
               </div>
             )}

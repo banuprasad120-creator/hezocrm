@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  CALL_RESULTS, CUSTOMER_RESPONSES, LEAD_STATUSES, inr,
+  CALL_RESULTS, CUSTOMER_RESPONSES, LEAD_STATUSES, addDaysISO, inr,
   type CallResult, type CustomerResponse, type Lead, type LeadStatus,
 } from "@/lib/crm";
 
@@ -169,14 +169,49 @@ export function CallUpdateDialog({
             <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What did the customer say?" />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Follow-up date {needsFollowUp && <span className="text-destructive">*</span>}</Label>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              <Label className="text-xs">Follow-up schedule {needsFollowUp && <span className="text-destructive">*</span>}</Label>
+              <div className="flex flex-wrap items-center gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setDate(addDaysISO(30)); setTime("11:00"); setNotes((n) => n ? `${n} | Callback next month` : "Busy / Callback next month"); }}
+                  className="h-6 px-1.5 text-[10px] font-bold text-indigo-500 bg-indigo-500/10 hover:bg-indigo-500/20"
+                >
+                  +30 Days (Next Month)
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setDate(addDaysISO(15)); setTime("11:00"); }}
+                  className="h-6 px-1.5 text-[10px]"
+                >
+                  +15 Days
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setDate(addDaysISO(1)); setTime("11:00"); }}
+                  className="h-6 px-1.5 text-[10px]"
+                >
+                  Tomorrow
+                </Button>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label>Follow-up time {needsFollowUp && <span className="text-destructive">*</span>}</Label>
-              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Date</Label>
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-9 text-xs" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Time</Label>
+                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="h-9 text-xs" />
+              </div>
             </div>
           </div>
         </div>

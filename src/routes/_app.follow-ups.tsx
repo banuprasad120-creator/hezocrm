@@ -55,12 +55,14 @@ function FollowUpsPage() {
 
   const today = todayISO();
   const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+  const in20Days = (() => { const d = new Date(); d.setDate(d.getDate() + 20); return d.toISOString().slice(0, 10); })();
 
   const pending = rows.filter((r) => !r.is_done);
   const buckets = {
     today: pending.filter((r) => r.follow_up_date === today),
     tomorrow: pending.filter((r) => r.follow_up_date === tomorrow),
-    upcoming: pending.filter((r) => r.follow_up_date > tomorrow),
+    upcoming: pending.filter((r) => r.follow_up_date > tomorrow && r.follow_up_date < in20Days),
+    month30: pending.filter((r) => r.follow_up_date >= in20Days || r.note?.toLowerCase().includes("cibil") || r.note?.toLowerCase().includes("month")),
     overdue: pending.filter((r) => r.follow_up_date < today),
     done: rows.filter((r) => r.is_done),
   };
@@ -83,6 +85,11 @@ function FollowUpsPage() {
                 {r.leads?.customer_name ?? "Lead"}
               </Link>
               {r.leads && <LeadStatusBadge status={r.leads.status} />}
+              {r.note?.toLowerCase().includes("cibil") && (
+                <span className="rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-500">
+                  No CIBIL Recheck
+                </span>
+              )}
             </div>
             <p className="mt-0.5 text-sm text-muted-foreground">
               📞 {r.leads?.mobile} · {r.leads ? inr(Number(r.leads.loan_amount)) : ""}
@@ -115,13 +122,19 @@ function FollowUpsPage() {
 
   return (
     <>
-      <PageHeader title={isAdmin ? "Follow-ups" : "My Follow-ups"} description="Scheduled callbacks grouped by due date." />
+      <PageHeader
+        title={isAdmin ? "Follow-ups" : "My Follow-ups"}
+        description="Scheduled callbacks grouped by due date, including 30-day No-CIBIL pipeline."
+      />
       <Tabs defaultValue="today" className="space-y-3">
         <div className="overflow-x-auto no-scrollbar pb-1">
           <TabsList className="inline-flex w-auto whitespace-nowrap p-1">
             <TabsTrigger value="today" className="text-xs sm:text-sm">Today ({buckets.today.length})</TabsTrigger>
             <TabsTrigger value="tomorrow" className="text-xs sm:text-sm">Tomorrow ({buckets.tomorrow.length})</TabsTrigger>
             <TabsTrigger value="upcoming" className="text-xs sm:text-sm">Upcoming ({buckets.upcoming.length})</TabsTrigger>
+            <TabsTrigger value="month30" className="text-xs sm:text-sm font-semibold text-indigo-500">
+              📅 30-Day Pipeline ({buckets.month30.length})
+            </TabsTrigger>
             <TabsTrigger value="overdue" className="text-xs sm:text-sm text-destructive font-semibold">Overdue ({buckets.overdue.length})</TabsTrigger>
             <TabsTrigger value="done" className="text-xs sm:text-sm">Done ({buckets.done.length})</TabsTrigger>
           </TabsList>
@@ -129,6 +142,7 @@ function FollowUpsPage() {
         <TabsContent value="today"><List items={buckets.today} /></TabsContent>
         <TabsContent value="tomorrow"><List items={buckets.tomorrow} /></TabsContent>
         <TabsContent value="upcoming"><List items={buckets.upcoming} /></TabsContent>
+        <TabsContent value="month30"><List items={buckets.month30} /></TabsContent>
         <TabsContent value="overdue"><List items={buckets.overdue} /></TabsContent>
         <TabsContent value="done"><List items={buckets.done} /></TabsContent>
       </Tabs>
