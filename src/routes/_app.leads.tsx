@@ -135,6 +135,11 @@ function LeadsPage() {
     try {
       const now = new Date().toISOString();
       const isAssigned = Boolean(newAgentId);
+
+      // 1. Fetch mobile of this lead
+      const { data: leadRec } = await supabase.from("leads").select("mobile").eq("id", leadId).maybeSingle();
+      const mob = leadRec?.mobile?.trim();
+
       const { error } = await supabase
         .from("leads")
         .update({
@@ -145,13 +150,29 @@ function LeadsPage() {
         .eq("id", leadId);
       if (error) throw error;
 
+      // STRICT RULE: Lock all matching phone numbers in company to this same agent so no other agent gets it
+      if (mob) {
+        await supabase
+          .from("leads")
+          .update({
+            assigned_to: isAssigned ? newAgentId : null,
+            assigned_at: isAssigned ? now : null,
+            status: isAssigned ? "Assigned" : "New",
+          })
+          .eq("mobile", mob)
+          .eq("company_id", companyId!);
+      }
+
       if (isAssigned) {
-        await supabase.from("lead_assignments").insert({
-          lead_id: leadId,
-          company_id: companyId!,
-          employee_id: newAgentId,
-          assigned_by: session?.userId ?? null,
-        });
+        await supabase.from("lead_assignments").upsert(
+          {
+            lead_id: leadId,
+            company_id: companyId!,
+            employee_id: newAgentId,
+            assigned_by: session?.userId ?? null,
+          },
+          { onConflict: "lead_id" }
+        );
       }
       toast.success(isAssigned ? "Lead assigned to agent!" : "Lead unassigned");
       qc.invalidateQueries({ queryKey: ["all-leads"] });
@@ -184,13 +205,29 @@ function LeadsPage() {
     setBusy(true);
     try {
       const ids = [...selected];
+      const { data: selLeads } = await supabase.from("leads").select("mobile").in("id", ids);
+      const mobiles = (selLeads ?? []).map((l) => l.mobile?.trim()).filter(Boolean) as string[];
+      const now = new Date().toISOString();
+
       const { error } = await supabase
         .from("leads")
-        .update({ assigned_to: assignAgent, assigned_at: new Date().toISOString(), status: "Assigned" })
-        .in("id", ids);
+        .update({ assigned_to: assignAgent, assigned_at: now, status: "Assigned" })
+        .in("id", ids)
+        .eq("company_id", companyId!);
       if (error) throw error;
-      await supabase.from("lead_assignments").insert(
+
+      // STRICT RULE: Lock all matching phone numbers in company to this agent so no other agent gets it
+      if (mobiles.length > 0) {
+        await supabase
+          .from("leads")
+          .update({ assigned_to: assignAgent, assigned_at: now, status: "Assigned" })
+          .in("mobile", mobiles)
+          .eq("company_id", companyId!);
+      }
+
+      await supabase.from("lead_assignments").upsert(
         ids.map((id) => ({ lead_id: id, company_id: companyId!, employee_id: assignAgent, assigned_by: session?.userId ?? null })),
+        { onConflict: "lead_id" }
       );
       toast.success(`Assigned ${ids.length} lead${ids.length > 1 ? "s" : ""}`);
       setSelected(new Set());

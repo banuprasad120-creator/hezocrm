@@ -194,6 +194,10 @@ function DailyLeads() {
   };
 
   const assignChunked = async (leadIds: string[], agentId: string, now: string) => {
+    // 1. Fetch mobiles of all leads being assigned to lock all duplicate records
+    const { data: leadsToAssign } = await supabase.from("leads").select("id, mobile").in("id", leadIds);
+    const mobiles = (leadsToAssign ?? []).map((l) => l.mobile?.trim()).filter(Boolean) as string[];
+
     const size = 500;
     for (let i = 0; i < leadIds.length; i += size) {
       const slice = leadIds.slice(i, i + size);
@@ -207,6 +211,14 @@ function DailyLeads() {
         { onConflict: "lead_id" },
       );
       if (aErr) throw aErr;
+    }
+
+    // STRICT RULE: Lock all matching phone numbers in the company to this agent so NO other agent can EVER receive this number
+    if (mobiles.length > 0) {
+      await supabase.from("leads")
+        .update({ assigned_to: agentId, assigned_at: now, status: "Assigned" })
+        .in("mobile", mobiles)
+        .eq("company_id", companyId!);
     }
   };
 
