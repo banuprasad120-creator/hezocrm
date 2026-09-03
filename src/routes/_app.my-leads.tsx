@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, CheckCircle2, Clock, Flame, Loader2, MessageCircle,
   PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff, Zap, Sparkles,
+  Award, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -15,6 +16,9 @@ import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { parseInterestedData } from "@/lib/interested-lead";
+import {
+  getCompanyBatchSettings, getActiveAgentBatch, allocateNextLeadBatch, type LeadBatch,
+} from "@/lib/lead-batch";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, inr, type Lead } from "@/lib/crm";
@@ -41,6 +45,22 @@ function MyLeads() {
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
   const [autoRefill, setAutoRefill] = useState(true);
   const [claiming, setClaiming] = useState(false);
+
+  /* ── Fetch Company Batch Settings (default 100) ── */
+  const { data: batchSettings } = useQuery({
+    queryKey: ["batch-settings", companyId],
+    enabled: Boolean(companyId),
+    queryFn: () => getCompanyBatchSettings(companyId!),
+  });
+  const batchSize = batchSettings?.batchSize ?? 100;
+  const isAutomationEnabled = batchSettings?.enabled ?? true;
+
+  /* ── Fetch Active Batch record ── */
+  const { data: activeBatch } = useQuery({
+    queryKey: ["active-batch", companyId, userId],
+    enabled: Boolean(companyId && userId),
+    queryFn: () => getActiveAgentBatch(companyId!, userId!),
+  });
 
   /* ── Fetch all assigned leads ── */
   const { data: leads = [], isLoading, refetch } = useQuery({
@@ -109,34 +129,41 @@ function MyLeads() {
   );
   const currentLead = pendingLeads[0] ?? null;
 
-  /* ── "Out of Service" — marks lead Wrong Number and unassigns it ── */
+  /* ── Batch Progress Calculations ── */
+  const batchTotal = activeBatch?.assigned_count || (uniqueLeads.length > 0 ? Math.max(uniqueLeads.length, batchSize) : batchSize);
+  const batchCompleted = stats.called;
+  const batchRemaining = stats.pending;
+  const batchPercent = batchTotal > 0 ? Math.min(100, Math.round((batchCompleted / (batchCompleted + batchRemaining || batchTotal)) * 100)) : 0;
+
+  /* ── Out of Service Mutation ── */
   const outOfServiceM = useMutation({
     mutationFn: async (lead: Lead) => {
-      const cleanMobile = lead.mobile.trim();
-      const { error } = await supabase.from("leads")
-        .update({ status: "Wrong Number", assigned_to: null, last_call_at: new Date().toISOString() })
-        .eq("mobile", cleanMobile)
-        .eq("company_id", lead.company_id);
-      if (error) throw error;
-      // Log call history
-      await supabase.from("call_history").insert({
+      const now = new Date().toISOString();
+      const { error: histErr } = await supabase.from("call_history").insert({
         lead_id: lead.id,
         company_id: lead.company_id,
         employee_id: userId!,
-        call_result: "Wrong Number",
-        customer_response: null,
+        call_result: "Switched Off",
+        customer_response: "Other",
         status: "Wrong Number",
-        notes: "Number out of service",
+        notes: "Marked Out of Service / Deleted",
+        called_at: now,
       });
+      if (histErr) throw histErr;
+
+      const { error: delErr } = await supabase.from("leads").delete().eq("id", lead.id);
+      if (delErr) {
+        await supabase.from("leads").update({ status: "Wrong Number", last_call_at: now }).eq("id", lead.id);
+      }
     },
     onSuccess: () => {
-      toast.success("Lead removed — number marked as out of service");
+      toast.success("Lead removed (Out of Service)");
       qc.invalidateQueries({ queryKey: ["my-leads"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  /* ── "Interested" quick action ── */
+  /* ── Interested Mutation ── */
   const interestedM = useMutation({
     mutationFn: async (lead: Lead) => {
       const now = new Date().toISOString();
@@ -161,119 +188,65 @@ function MyLeads() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  /* ── Automated / On-demand Lead Claiming & Assignment ── */
-  const claimNextLeads = async (count = 10, isAutomatic = false) => {
+  /* ── Automated / On-demand Batch Allocation & Refill ── */
+  const claimNextBatch = async (isAutomatic = false) => {
     if (!companyId || !userId || claiming) return;
     setClaiming(true);
     try {
-      // 1. Fetch all mobile numbers that have EVER been assigned or called in the company
-      const { data: historyLeads } = await supabase
-        .from("leads")
-        .select("mobile")
-        .eq("company_id", companyId)
-        .or("assigned_to.not.is.null,last_call_at.not.is.null,status.neq.New");
-
-      const alreadySentMobiles = new Set<string>();
-      for (const item of historyLeads ?? []) {
-        const clean = (item.mobile || "").replace(/\D/g, "").slice(-10);
-        if (clean) alreadySentMobiles.add(clean);
-      }
-
-      // 2. Find fresh unassigned leads in this company (from latest folder)
-      const { data: unassigned, error } = await supabase
-        .from("leads")
-        .select("id, mobile")
-        .eq("company_id", companyId)
-        .is("assigned_to", null)
-        .order("folder_date", { ascending: false })
-        .order("created_at", { ascending: true })
-        .limit(count * 5);
-
-      if (error) throw error;
-      if (!unassigned || unassigned.length === 0) {
-        if (!isAutomatic) toast.info("No fresh unassigned leads available in company folders right now.");
-        return;
-      }
-
-      // Deduplicate by clean mobile number AND strictly exclude already sent numbers
-      const seen = new Set<string>();
-      const idsToClaim: string[] = [];
-      for (const item of unassigned) {
-        const cleanMob = (item.mobile || "").replace(/\D/g, "").slice(-10);
-        if (cleanMob) {
-          // STRICT RULE: Never re-send numbers that have ever been assigned or called to any agent!
-          if (alreadySentMobiles.has(cleanMob)) continue;
-
-          if (!seen.has(cleanMob)) {
-            seen.add(cleanMob);
-            idsToClaim.push(item.id);
-            if (idsToClaim.length >= count) break;
-          }
-        } else {
-          idsToClaim.push(item.id);
-          if (idsToClaim.length >= count) break;
-        }
-      }
-
-      if (idsToClaim.length === 0) {
-        if (!isAutomatic) toast.info("All available leads in this folder have already been contacted. Please import fresh leads.");
-        return;
-      }
-
-      const now = new Date().toISOString();
-      const { error: updErr } = await supabase
-        .from("leads")
-        .update({ assigned_to: userId, assigned_at: now, status: "Assigned" })
-        .in("id", idsToClaim)
-        .eq("company_id", companyId);
-      if (updErr) throw updErr;
-
-      // Record lead assignments history
-      await supabase.from("lead_assignments").upsert(
-        idsToClaim.map((id) => ({
-          lead_id: id,
-          company_id: companyId,
-          employee_id: userId,
-          assigned_by: userId,
-        })),
-        { onConflict: "lead_id" }
+      const res = await allocateNextLeadBatch(
+        companyId,
+        userId,
+        batchSize,
+        isAutomatic ? "AUTO_BATCH_REFILL" : "MANUAL_BATCH_REQUEST"
       );
 
-      toast.success(`⚡ Automated refill: ${idsToClaim.length} new leads assigned to your queue!`);
-      await qc.invalidateQueries({ queryKey: ["my-leads"] });
+      if (res.success && res.assigned_count && res.assigned_count > 0) {
+        if (res.assigned_count < batchSize) {
+          toast.info(`⚡ ${res.assigned_count} new leads assigned. Only ${res.assigned_count} eligible unassigned leads remain.`);
+        } else {
+          toast.success(`🎉 Previous batch completed! ${res.assigned_count} new leads assigned in Batch #${res.batch_number || 1}!`);
+        }
+        await qc.invalidateQueries({ queryKey: ["my-leads"] });
+        await qc.invalidateQueries({ queryKey: ["active-batch"] });
+        await qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+      } else if (res.assigned_count === 0) {
+        if (!isAutomatic) {
+          toast.info("No unassigned leads available in company folders right now.");
+        }
+      }
     } catch (err) {
-      console.error("Auto claim error:", err);
-      if (!isAutomatic) toast.error(err instanceof Error ? err.message : "Failed to claim leads");
+      console.error("Batch allocation error:", err);
+      if (!isAutomatic) toast.error(err instanceof Error ? err.message : "Failed to claim batch");
     } finally {
       setClaiming(false);
     }
   };
 
-  // Automated trigger: When an agent finishes all pending leads, auto-assign next 10 leads!
+  /* ── Automated trigger: When an agent finishes all pending leads in their batch, auto-assign next batch! ── */
   useEffect(() => {
-    if (!isLoading && leads.length > 0 && pendingLeads.length === 0 && autoRefill && !claiming) {
-      claimNextLeads(10, true);
+    if (!isLoading && autoRefill && isAutomationEnabled && pendingLeads.length === 0 && !claiming) {
+      claimNextBatch(true);
     }
-  }, [isLoading, leads.length, pendingLeads.length, autoRefill]);
+  }, [isLoading, pendingLeads.length, autoRefill, isAutomationEnabled]);
 
   const isBusy = outOfServiceM.isPending || interestedM.isPending || claiming;
 
   return (
     <>
       <PageHeader
-        title="My Leads"
-        description={`${stats.pending} pending · ${stats.called} called · ${stats.assigned} total`}
+        title="Agent Workspace"
+        description={`${stats.pending} pending · ${stats.called} called · ${stats.assigned} total in queue`}
         actions={
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               disabled={claiming}
-              onClick={() => claimNextLeads(10, false)}
+              onClick={() => claimNextBatch(false)}
               className="h-9 font-bold border-brand/40 text-brand hover:bg-brand/10"
             >
               {claiming ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1 h-3.5 w-3.5 fill-brand" />}
-              Fetch +10 Leads
+              Fetch +{batchSize} Leads
             </Button>
             <Button variant="outline" size="sm" onClick={() => refetch()} className="h-9">
               <RefreshCw className="mr-1 h-4 w-4" /> Refresh
@@ -290,6 +263,92 @@ function MyLeads() {
         <StatCard label="Interested" value={stats.interested} icon={Flame} tone="success" />
       </div>
 
+      {/* ── CURRENT LEAD BATCH CARD ── */}
+      <div className="mt-4 rounded-2xl border bg-card p-4 sm:p-5 card-elevated border-brand/25 space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-b pb-3">
+          <div className="flex items-center gap-2.5">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand/15 text-brand">
+              <Sparkles className="h-5 w-5" />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-extrabold text-foreground">
+                  CURRENT LEAD BATCH {activeBatch ? `· Batch #${activeBatch.batch_number}` : ""}
+                </h3>
+                <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                  batchRemaining === 0
+                    ? "bg-success/15 text-success border border-success/30"
+                    : "bg-brand/10 text-brand border border-brand/20"
+                }`}>
+                  {batchRemaining === 0 ? "BATCH COMPLETED" : "IN PROGRESS"}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Configured batch size: <strong>{batchSize} leads</strong> · Refill triggers automatically when remaining reaches 0.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground font-semibold">⚡ Auto-Refill:</span>
+            <Switch checked={autoRefill} onCheckedChange={setAutoRefill} className="scale-75" />
+          </div>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-semibold text-foreground">Batch Completion Progress</span>
+            <span className="font-mono font-bold text-brand">{batchPercent}% ({batchCompleted} / {batchCompleted + batchRemaining || batchTotal})</span>
+          </div>
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted/40">
+            <div
+              className="h-full rounded-full gradient-brand transition-all duration-500"
+              style={{ width: `${batchPercent}%` }}
+            />
+          </div>
+        </div>
+
+        {/* 3 Metric Badges */}
+        <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+          <div className="rounded-xl border bg-muted/20 p-2 sm:p-2.5">
+            <p className="text-[10px] sm:text-xs text-muted-foreground uppercase font-semibold">Current Batch</p>
+            <p className="text-sm sm:text-lg font-extrabold text-foreground">{batchTotal} Leads</p>
+          </div>
+          <div className="rounded-xl border bg-success/10 border-success/20 p-2 sm:p-2.5">
+            <p className="text-[10px] sm:text-xs text-success uppercase font-semibold">Completed</p>
+            <p className="text-sm sm:text-lg font-extrabold text-success">{batchCompleted}</p>
+          </div>
+          <div className="rounded-xl border bg-warning/10 border-warning/20 p-2 sm:p-2.5">
+            <p className="text-[10px] sm:text-xs text-warning uppercase font-semibold">Remaining</p>
+            <p className="text-sm sm:text-lg font-extrabold text-warning">{batchRemaining}</p>
+          </div>
+        </div>
+
+        {/* Next Batch Status Info */}
+        <div className="rounded-xl border bg-muted/15 p-2.5 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground">
+              {batchRemaining > 0
+                ? `Next Batch: ${batchSize} Leads · Waiting for current batch completion (${batchRemaining} remaining)`
+                : claiming
+                ? "Status: Pulling next batch from unassigned pool…"
+                : "Status: NEW BATCH ASSIGNED (or ready to claim)"}
+            </span>
+          </div>
+          {batchRemaining === 0 && !claiming && (
+            <Button
+              size="sm"
+              onClick={() => claimNextBatch(false)}
+              className="h-7 text-[11px] font-bold gradient-brand text-white shrink-0"
+            >
+              <Zap className="mr-1 h-3 w-3 fill-white" /> Get Next Batch
+            </Button>
+          )}
+        </div>
+      </div>
+
       {isLoading && (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -303,12 +362,8 @@ function MyLeads() {
             <div className="mt-6">
               <div className="mb-3 flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Current Lead — {pendingLeads.length} remaining
+                  Current Lead — {pendingLeads.length} remaining in batch
                 </p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>⚡ Auto-Refill:</span>
-                  <Switch checked={autoRefill} onCheckedChange={setAutoRefill} className="scale-75" />
-                </div>
               </div>
               <LeadCard
                 lead={currentLead}
@@ -327,7 +382,7 @@ function MyLeads() {
               </div>
               <div>
                 <p className="text-xl font-extrabold text-foreground">
-                  {claiming ? "Fetching New Leads Automatically… ⚡" : "All Assigned Leads Completed! 🎉"}
+                  {claiming ? "Fetching New Batch Automatically… ⚡" : "All Batch Leads Completed! 🎉"}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
                   {claiming
@@ -338,25 +393,12 @@ function MyLeads() {
 
               <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                 <Button
-                  onClick={() => claimNextLeads(10, false)}
+                  onClick={() => claimNextBatch(false)}
                   disabled={claiming}
-                  className="gradient-brand text-white font-bold h-11 px-5 shadow-md"
+                  className="gradient-brand text-white font-bold h-11 px-6 shadow-md"
                 >
-                  <Zap className="mr-2 h-4 w-4 fill-white" /> Claim Next 10 Leads
+                  <Zap className="mr-2 h-4 w-4 fill-white" /> Claim Next {batchSize} Leads
                 </Button>
-                <Button
-                  onClick={() => claimNextLeads(25, false)}
-                  disabled={claiming}
-                  variant="outline"
-                  className="font-bold h-11 px-5 border-brand/40 text-brand hover:bg-brand/10"
-                >
-                  <Sparkles className="mr-2 h-4 w-4" /> Claim Next 25 Leads
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-2 text-xs text-muted-foreground pt-2 border-t">
-                <span>⚡ Auto-refill next leads on completion:</span>
-                <Switch checked={autoRefill} onCheckedChange={setAutoRefill} />
               </div>
             </div>
           )}
@@ -365,7 +407,7 @@ function MyLeads() {
           {stats.called > 0 && (
             <div className="mt-8">
               <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Completed Leads ({stats.called})
+                Completed Leads in Queue ({stats.called})
               </p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {leads
@@ -400,43 +442,39 @@ function MyLeads() {
                             )}
                             {intData?.serviceYears && (
                               <div className="text-muted-foreground">
-                                💼 Experience: <strong className="text-foreground">{intData.serviceYears} yrs</strong>
+                                💼 Experience: <strong className="text-foreground">{intData.serviceYears} years</strong>
                               </div>
                             )}
-                            {(intData?.hasExistingLoans || intData?.hasCreditCards) && (
-                              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                                {intData?.hasExistingLoans && <span>🏛️ {intData.loans.length} Loans</span>}
-                                {intData?.hasCreditCards && <span>💳 {intData.creditCards.length} Cards</span>}
+                            {intData?.loans && intData.loans.length > 0 && (
+                              <div className="text-muted-foreground">
+                                💳 Active Loans: <strong className="text-foreground">{intData.loans.length}</strong>
                               </div>
                             )}
-                            {followUpByLead.get(l.id) && (
-                              <p className="text-xs text-warning font-semibold">
-                                <CalendarClock className="mr-1 inline h-3 w-3" />
-                                {followUpByLead.get(l.id)!.date}
-                              </p>
+                            {l.loan_amount && (
+                              <div className="text-muted-foreground">
+                                💰 Required Loan: <strong className="text-foreground">{inr(Number(l.loan_amount))}</strong> ({l.loan_type})
+                              </div>
+                            )}
+                            {l.notes && (
+                              <div className="mt-1 text-[11px] text-muted-foreground italic line-clamp-2">
+                                "{l.notes}"
+                              </div>
                             )}
                           </div>
                         </div>
 
-                        {/* Actions */}
-                        <div className="mt-3 pt-2.5 border-t flex items-center justify-between gap-1">
-                          <Button size="sm" variant="ghost" className="h-7 text-xs px-2" onClick={() => setViewLead(l)}>
-                            View Details
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs px-2 font-semibold"
-                            onClick={() => {
-                              if (l.status === "Interested") {
-                                setInterestedLead(l);
-                              } else {
-                                setActive(l);
-                              }
-                            }}
-                          >
-                            Update
-                          </Button>
+                        <div className="mt-3 flex items-center justify-between border-t pt-2.5">
+                          <span className="text-[11px] text-muted-foreground">
+                            {l.city || "—"} · {l.folder_date}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <Button asChild size="sm" variant="outline" className="h-7 text-xs font-semibold">
+                              <a href={`tel:${l.mobile}`}>Call</a>
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setViewLead(l)}>
+                              Details
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -447,37 +485,52 @@ function MyLeads() {
         </>
       )}
 
+      {/* Active Lead Update Sheet */}
+      {active && (
+        <CallUpdateDialog
+          lead={active}
+          employeeId={userId || ""}
+          open={Boolean(active)}
+          onOpenChange={(o) => {
+            if (!o) setActive(null);
+            qc.invalidateQueries({ queryKey: ["my-leads"] });
+            qc.invalidateQueries({ queryKey: ["active-batch"] });
+          }}
+        />
+      )}
+
+      {/* Interested Questionnaire Dialog */}
+      {interestedLead && (
+        <InterestedLeadDialog
+          lead={interestedLead}
+          employeeId={userId || ""}
+          open={Boolean(interestedLead)}
+          onOpenChange={(o) => !o && setInterestedLead(null)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ["my-leads"] });
+            qc.invalidateQueries({ queryKey: ["active-batch"] });
+          }}
+        />
+      )}
+
+      {/* View Lead Sheet */}
       <AgentLeadSheet
         lead={viewLead}
         open={Boolean(viewLead)}
         onOpenChange={(o) => !o && setViewLead(null)}
-        onUpdate={(l) => { setViewLead(null); setActive(l); }}
-      />
-
-      <CallUpdateDialog
-        lead={active}
-        employeeId={userId ?? ""}
-        open={Boolean(active)}
-        onOpenChange={(o) => !o && setActive(null)}
-      />
-
-      <InterestedLeadDialog
-        lead={interestedLead}
-        employeeId={userId ?? ""}
-        open={Boolean(interestedLead)}
-        onOpenChange={(o) => !o && setInterestedLead(null)}
-        onSuccess={() => {
-          setInterestedLead(null);
-          refetch();
-        }}
       />
     </>
   );
 }
 
-/* ── LeadCard component — shows ONE lead with all action buttons ── */
 function LeadCard({
-  lead, followUp, isBusy, onView, onUpdate, onOutOfService, onInterested,
+  lead,
+  followUp,
+  isBusy,
+  onView,
+  onUpdate,
+  onOutOfService,
+  onInterested,
 }: {
   lead: Lead;
   followUp?: { date: string; time: string | null };
@@ -487,91 +540,106 @@ function LeadCard({
   onOutOfService: () => void;
   onInterested: () => void;
 }) {
-  const intData = parseInterestedData(lead.notes);
+  const initials = lead.customer_name
+    .split(" ")
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join("");
 
   return (
-    <div className="rounded-2xl border-2 border-brand/30 bg-card p-5 shadow-lg card-elevated">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <button onClick={onView} className="truncate text-lg font-extrabold hover:underline text-left w-full">
-            {lead.customer_name}
-          </button>
-          <p className="mt-0.5 text-base font-semibold text-muted-foreground">📞 {lead.mobile}</p>
-          <p className="text-sm">
-            Loan: <span className="font-bold text-foreground">{inr(Number(lead.loan_amount))}</span>
-          </p>
-          <p className="text-xs text-muted-foreground">{lead.loan_type}{lead.city ? ` · ${lead.city}` : ""}</p>
-          
-          {/* If already has CIBIL / updated data */}
-          {intData && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs bg-muted/30 rounded-lg p-2">
-              {intData.cibilScore && <span className="font-bold text-indigo-500">🛡️ CIBIL: {intData.cibilScore}</span>}
-              {intData.salaryBank && <span>🏦 {intData.salaryBank}</span>}
-              {intData.serviceYears && <span>💼 {intData.serviceYears} yrs</span>}
+    <div className="relative overflow-hidden rounded-2xl border bg-card p-5 shadow-lg card-elevated border-brand/30">
+      <div className="absolute right-0 top-0 h-24 w-24 rounded-bl-full bg-brand/5 pointer-events-none" />
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3.5">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border bg-elevated text-base font-extrabold text-brand shadow-sm">
+            {initials}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-lg font-extrabold text-foreground">{lead.customer_name}</p>
+              <LeadStatusBadge status={lead.status} />
             </div>
-          )}
-
-          {followUp && (
-            <p className="mt-1 text-xs font-semibold text-warning">
-              <CalendarClock className="mr-1 inline h-3.5 w-3.5" />
-              Follow-up: {followUp.date}{followUp.time ? ` at ${String(followUp.time).slice(0, 5)}` : ""}
-            </p>
-          )}
+            <p className="mt-0.5 font-mono text-sm font-semibold text-muted-foreground">{lead.mobile}</p>
+            {lead.email && <p className="text-xs text-muted-foreground">{lead.email}</p>}
+          </div>
         </div>
-        <LeadStatusBadge status={lead.status} />
-      </div>
 
-      {/* Primary: CALL button */}
-      <div className="mt-5 space-y-2.5">
-        <Button asChild className="h-14 w-full gradient-brand text-lg font-extrabold text-white shadow-md">
-          <a href={`tel:${lead.mobile}`}>
-            <PhoneCall className="mr-2 h-6 w-6" /> CALL NOW
-          </a>
-        </Button>
-
-        {/* Quick action buttons */}
-        <div className="grid grid-cols-2 gap-2">
-          {/* INTERESTED */}
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            className="h-12 w-full bg-success/15 border border-success/30 text-success font-bold hover:bg-success/25"
-            variant="outline"
+            size="sm"
             disabled={isBusy}
             onClick={onInterested}
+            className="h-9 px-3.5 font-bold gradient-brand text-white shadow-sm"
           >
-            {isBusy ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Star className="mr-2 h-4 w-4 fill-success" />
-            )}
-            INTERESTED
+            <Star className="mr-1.5 h-4 w-4 fill-white" /> Interested
           </Button>
 
-          {/* OUT OF SERVICE */}
           <Button
-            className="h-12 w-full bg-destructive/10 border border-destructive/30 text-destructive font-bold hover:bg-destructive/20"
+            size="sm"
             variant="outline"
             disabled={isBusy}
             onClick={onOutOfService}
+            className="h-9 px-3 text-destructive border-destructive/30 hover:bg-destructive/10"
+            title="Mark Out of Service / Delete"
           >
-            <WifiOff className="mr-2 h-4 w-4" />
-            OUT OF SERVICE
+            <WifiOff className="mr-1.5 h-3.5 w-3.5" /> Out of Service
+          </Button>
+        </div>
+      </div>
+
+      {/* Loan & details bar */}
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 rounded-xl border bg-muted/30 p-3 text-xs">
+        <div>
+          <span className="text-muted-foreground block text-[11px]">Loan Amount</span>
+          <strong className="text-sm font-extrabold text-foreground">{inr(Number(lead.loan_amount))}</strong>
+        </div>
+        <div>
+          <span className="text-muted-foreground block text-[11px]">Loan Type</span>
+          <strong className="text-foreground">{lead.loan_type}</strong>
+        </div>
+        <div>
+          <span className="text-muted-foreground block text-[11px]">City</span>
+          <strong className="text-foreground">{lead.city || "—"}</strong>
+        </div>
+        <div>
+          <span className="text-muted-foreground block text-[11px]">Folder Date</span>
+          <strong className="text-foreground">{lead.folder_date}</strong>
+        </div>
+      </div>
+
+      {/* Scheduled follow-up pill */}
+      {followUp && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
+          <CalendarClock className="h-4 w-4 shrink-0" />
+          <span>
+            Scheduled follow-up: <strong>{followUp.date}</strong> {followUp.time ? `at ${followUp.time}` : ""}
+          </span>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
+        <div className="flex items-center gap-2">
+          <Button asChild size="sm" className="h-9 gap-1.5 bg-brand hover:bg-brand/90 text-white font-bold">
+            <a href={`tel:${lead.mobile}`}><PhoneCall className="h-4 w-4" /> Call</a>
+          </Button>
+          <Button asChild variant="outline" size="sm" className="h-9 gap-1.5">
+            <a href={`https://wa.me/${lead.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+              <MessageCircle className="h-4 w-4 text-success" /> WhatsApp
+            </a>
           </Button>
         </div>
 
-        {/* Secondary actions */}
-        <div className="grid grid-cols-3 gap-2">
-          <Button asChild variant="outline" className="h-10">
-            <a href={`https://wa.me/${lead.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
-              <MessageCircle className="h-4 w-4" />
-            </a>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onView} className="h-9">
+            Lead Sheet
           </Button>
-          <Button variant="outline" className="h-10" onClick={onView}>VIEW</Button>
-          <Button variant="outline" className="h-10 font-semibold" onClick={onUpdate}>UPDATE</Button>
+          <Button size="sm" onClick={onUpdate} className="h-9 gradient-brand text-white font-bold">
+            Update Outcome
+          </Button>
         </div>
       </div>
     </div>
   );
 }
-
-

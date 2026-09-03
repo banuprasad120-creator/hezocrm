@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2, UserPlus } from "lucide-react";
+import { Loader2, Trash2, UserPlus, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { createAgent } from "@/lib/crm.functions";
 import { StatusBadge } from "@/components/common/StatusBadge";
+import { allocateNextLeadBatch } from "@/lib/lead-batch";
 
 export const Route = createFileRoute("/_app/agents")({
   head: () => ({
@@ -74,6 +75,21 @@ function AgentsPage() {
     qc.invalidateQueries({ queryKey: ["agents"] });
   };
 
+  const allocateBatchForAgent = async (agentId: string, agentName: string) => {
+    if (!companyId) return;
+    try {
+      const res = await allocateNextLeadBatch(companyId, agentId, 100, "INITIAL_ALLOCATION");
+      if (res.success && res.assigned_count && res.assigned_count > 0) {
+        toast.success(`Allocated ${res.assigned_count} leads to ${agentName}`);
+        qc.invalidateQueries();
+      } else {
+        toast.info(res.message || "No unassigned leads available to allocate");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to allocate batch");
+    }
+  };
+
   const deleteAgent = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to delete agent "${name}"? This action cannot be undone.`)) return;
     // Unassign their leads
@@ -100,18 +116,19 @@ function AgentsPage() {
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Create agent</DialogTitle>
-                <DialogDescription>The agent signs in with this email and password.</DialogDescription>
+                <DialogTitle>Add New Calling Agent</DialogTitle>
+                <DialogDescription>Create a login for a team member who will make calls.</DialogDescription>
               </DialogHeader>
-              <div className="space-y-3">
-                <div className="space-y-1.5"><Label>Full name</Label><Input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></div>
-                <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-                <div className="space-y-1.5"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
-                <div className="space-y-1.5"><Label>Temporary password</Label><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="min 6 characters" /></div>
+              <div className="grid gap-3 py-2">
+                <div><Label>Full name</Label><Input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} placeholder="Priya Sharma" /></div>
+                <div><Label>Email</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="priya@company.com" /></div>
+                <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98765 43210" /></div>
+                <div><Label>Temporary Password</Label><Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 6 characters" /></div>
               </div>
               <DialogFooter>
-                <Button onClick={submit} disabled={busy || !form.email || form.password.length < 6} className="gradient-brand text-white">
-                  {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Create agent
+                <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+                <Button className="gradient-brand text-white" disabled={busy || !form.email || !form.password} onClick={submit}>
+                  {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null} Create Agent
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -119,26 +136,30 @@ function AgentsPage() {
         }
       />
 
-      {/* Mobile Agents Card View (< md) */}
+      {/* Mobile Agents List (< md) */}
       <div className="space-y-3 md:hidden">
         {agents.map((a) => (
           <div key={a.id} className="rounded-2xl border bg-card p-4 card-elevated">
             <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl gradient-brand text-xs font-bold text-white shadow-sm">
-                  {(a.full_name || a.email).slice(0, 2).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-foreground">{a.full_name || "—"}</p>
-                  <p className="truncate text-xs text-muted-foreground">{a.email}</p>
-                </div>
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-foreground">{a.full_name || "—"}</p>
+                <p className="truncate text-xs text-muted-foreground">{a.email}</p>
               </div>
               <StatusBadge label={a.is_active ? "Active" : "Suspended"} />
             </div>
-
             <div className="mt-3 flex items-center justify-between border-t pt-3 text-xs">
               <span className="text-muted-foreground">Assigned leads: <strong className="text-foreground">{counts[a.id] ?? 0}</strong></span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                {(counts[a.id] ?? 0) === 0 && a.is_active && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs font-bold border-brand/40 text-brand"
+                    onClick={() => allocateBatchForAgent(a.id, a.full_name || a.email)}
+                  >
+                    <Zap className="mr-1 h-3 w-3 fill-brand" /> +100
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" className="h-8 text-xs font-semibold" onClick={() => toggleActive(a.id, !a.is_active)}>
                   {a.is_active ? "Deactivate" : "Activate"}
                 </Button>
@@ -172,7 +193,17 @@ function AgentsPage() {
                 <td className="px-4 py-3">{counts[a.id] ?? 0}</td>
                 <td className="px-4 py-3"><StatusBadge label={a.is_active ? "Active" : "Suspended"} /></td>
                 <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-end gap-2">
+                    {(counts[a.id] ?? 0) === 0 && a.is_active && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs font-bold border-brand/40 text-brand hover:bg-brand/10"
+                        onClick={() => allocateBatchForAgent(a.id, a.full_name || a.email)}
+                      >
+                        <Zap className="mr-1 h-3.5 w-3.5 fill-brand" /> Allocate Batch
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => toggleActive(a.id, !a.is_active)}>
                       {a.is_active ? "Deactivate" : "Activate"}
                     </Button>
