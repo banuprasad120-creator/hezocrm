@@ -296,9 +296,13 @@ function InterestedLeadsPage() {
                           <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-bold text-success flex items-center gap-1">
                             <Flame className="h-3 w-3 fill-success" /> Interested
                           </span>
-                          {data?.cibilScore && (
+                          {data?.cibilScore ? (
                             <span className="rounded-full bg-indigo-500/15 border border-indigo-500/30 px-2 py-0.5 text-[11px] font-bold text-indigo-500">
-                              🛡️ CIBIL: {data.cibilScore}
+                              🛡️ CIBIL: {data.cibilScore === "0" ? "0 (No CIBIL)" : data.cibilScore}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-muted border px-2 py-0.5 text-[11px] text-muted-foreground font-medium">
+                              🛡️ CIBIL: Not Recorded
                             </span>
                           )}
                         </div>

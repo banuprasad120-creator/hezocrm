@@ -129,14 +129,57 @@ export function serializeInterestedData(data: InterestedLeadData, userNotes?: st
 export function parseInterestedData(notesText?: string | null): InterestedLeadData | null {
   if (!notesText) return null;
   const startIdx = notesText.indexOf(TAG_START);
-  if (startIdx === -1) return null;
-  const endIdx = notesText.indexOf(TAG_END, startIdx);
-  if (endIdx === -1) return null;
+  
+  if (startIdx !== -1) {
+    const endIdx = notesText.indexOf(TAG_END, startIdx);
+    if (endIdx !== -1) {
+      try {
+        const rawJson = notesText.slice(startIdx + TAG_START.length, endIdx);
+        const parsed = JSON.parse(rawJson) as InterestedLeadData;
+        
+        // Fallback check for CIBIL in text if not set in JSON
+        if (!parsed.cibilScore) {
+          const cibilMatch = notesText.match(/CIBIL(?:\s*\/\s*Credit\s*Score)?\s*[:=\-]?\s*([0-9]{3}|0|No\s*CIBIL)/i);
+          if (cibilMatch) parsed.cibilScore = cibilMatch[1];
+        }
+        if (!parsed.salaryBank) {
+          const salMatch = notesText.match(/Salary\s*(?:Account)?\s*Bank\s*[:=\-]?\s*([^\n,•]+)/i);
+          if (salMatch) parsed.salaryBank = salMatch[1].trim();
+        }
+        if (!parsed.serviceYears) {
+          const expMatch = notesText.match(/(?:Service\s*Years|Experience|Service\s*Exp)\s*[:=\-]?\s*([0-9.]+(?:\s*yrs?)?)/i);
+          if (expMatch) parsed.serviceYears = expMatch[1].trim();
+        }
 
-  try {
-    const rawJson = notesText.slice(startIdx + TAG_START.length, endIdx);
-    return JSON.parse(rawJson) as InterestedLeadData;
-  } catch {
-    return null;
+        return parsed;
+      } catch {
+        // Fall through to text regex parser
+      }
+    }
   }
+
+  // Fallback if structured tag is missing but notes contain interested details
+  const cibilMatch = notesText.match(/CIBIL(?:\s*\/\s*Credit\s*Score)?\s*[:=\-]?\s*([0-9]{3}|0|No\s*CIBIL)/i);
+  const isInterested = notesText.toLowerCase().includes("interested") || notesText.toLowerCase().includes("service accepted");
+
+  if (isInterested || cibilMatch) {
+    const salMatch = notesText.match(/Salary\s*(?:Account)?\s*Bank\s*[:=\-]?\s*([^\n,•]+)/i);
+    const expMatch = notesText.match(/(?:Service\s*Years|Experience|Service\s*Exp)\s*[:=\-]?\s*([0-9.]+(?:\s*yrs?)?)/i);
+    
+    return {
+      serviceRequired: "Personal Loan",
+      hasExistingLoans: notesText.toLowerCase().includes("loan"),
+      loansCount: 0,
+      loans: [],
+      hasCreditCards: notesText.toLowerCase().includes("card"),
+      cardsCount: 0,
+      creditCards: [],
+      cibilScore: cibilMatch ? cibilMatch[1] : undefined,
+      salaryBank: salMatch ? salMatch[1].trim() : undefined,
+      serviceYears: expMatch ? expMatch[1].trim() : undefined,
+      notes: notesText,
+    };
+  }
+
+  return null;
 }

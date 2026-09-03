@@ -14,6 +14,7 @@ import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
+import { parseInterestedData } from "@/lib/interested-lead";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, inr, type Lead } from "@/lib/crm";
@@ -353,32 +354,77 @@ function MyLeads() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {leads
                   .filter((l) => CONTACTED_STATUSES.includes(l.status))
-                  .map((l) => (
-                    <div
-                      key={l.id}
-                      className="cursor-pointer rounded-2xl border bg-card/60 p-4 card-elevated opacity-80 hover:opacity-100 transition-opacity"
-                      onClick={() => setViewLead(l)}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-bold">{l.customer_name}</p>
-                          <p className="text-xs text-muted-foreground">{l.mobile}</p>
+                  .map((l) => {
+                    const intData = parseInterestedData(l.notes);
+                    return (
+                      <div
+                        key={l.id}
+                        className="rounded-2xl border bg-card p-4 card-elevated flex flex-col justify-between hover:border-brand/40 transition-colors"
+                      >
+                        <div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-extrabold text-foreground">{l.customer_name}</p>
+                              <p className="text-xs text-muted-foreground">📞 {l.mobile}</p>
+                            </div>
+                            <LeadStatusBadge status={l.status} />
+                          </div>
+
+                          {/* Updated Lead Data / CIBIL / Banking Profile */}
+                          <div className="mt-2.5 space-y-1.5 text-xs">
+                            {intData?.cibilScore && (
+                              <div className="flex items-center gap-1 font-bold text-indigo-500">
+                                <span>🛡️ CIBIL Score: {intData.cibilScore}</span>
+                              </div>
+                            )}
+                            {intData?.salaryBank && (
+                              <div className="text-muted-foreground">
+                                🏦 Salary Bank: <strong className="text-foreground">{intData.salaryBank}</strong>
+                              </div>
+                            )}
+                            {intData?.serviceYears && (
+                              <div className="text-muted-foreground">
+                                💼 Experience: <strong className="text-foreground">{intData.serviceYears} yrs</strong>
+                              </div>
+                            )}
+                            {(intData?.hasExistingLoans || intData?.hasCreditCards) && (
+                              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                {intData?.hasExistingLoans && <span>🏛️ {intData.loans.length} Loans</span>}
+                                {intData?.hasCreditCards && <span>💳 {intData.creditCards.length} Cards</span>}
+                              </div>
+                            )}
+                            {followUpByLead.get(l.id) && (
+                              <p className="text-xs text-warning font-semibold">
+                                <CalendarClock className="mr-1 inline h-3 w-3" />
+                                {followUpByLead.get(l.id)!.date}
+                              </p>
+                            )}
+                          </div>
                         </div>
-                        <LeadStatusBadge status={l.status} />
+
+                        {/* Actions */}
+                        <div className="mt-3 pt-2.5 border-t flex items-center justify-between gap-1">
+                          <Button size="sm" variant="ghost" className="h-7 text-xs px-2" onClick={() => setViewLead(l)}>
+                            View Details
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2 font-semibold"
+                            onClick={() => {
+                              if (l.status === "Interested") {
+                                setInterestedLead(l);
+                              } else {
+                                setActive(l);
+                              }
+                            }}
+                          >
+                            Update
+                          </Button>
+                        </div>
                       </div>
-                      {l.status === "Interested" && (
-                        <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-success">
-                          <Flame className="h-3.5 w-3.5 fill-success" /> Interested
-                        </p>
-                      )}
-                      {followUpByLead.get(l.id) && (
-                        <p className="mt-1 text-xs text-warning">
-                          <CalendarClock className="mr-1 inline h-3 w-3" />
-                          {followUpByLead.get(l.id)!.date}
-                        </p>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
               </div>
             </div>
           )}
@@ -425,6 +471,8 @@ function LeadCard({
   onOutOfService: () => void;
   onInterested: () => void;
 }) {
+  const intData = parseInterestedData(lead.notes);
+
   return (
     <div className="rounded-2xl border-2 border-brand/30 bg-card p-5 shadow-lg card-elevated">
       {/* Header */}
@@ -438,6 +486,16 @@ function LeadCard({
             Loan: <span className="font-bold text-foreground">{inr(Number(lead.loan_amount))}</span>
           </p>
           <p className="text-xs text-muted-foreground">{lead.loan_type}{lead.city ? ` · ${lead.city}` : ""}</p>
+          
+          {/* If already has CIBIL / updated data */}
+          {intData && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs bg-muted/30 rounded-lg p-2">
+              {intData.cibilScore && <span className="font-bold text-indigo-500">🛡️ CIBIL: {intData.cibilScore}</span>}
+              {intData.salaryBank && <span>🏦 {intData.salaryBank}</span>}
+              {intData.serviceYears && <span>💼 {intData.serviceYears} yrs</span>}
+            </div>
+          )}
+
           {followUp && (
             <p className="mt-1 text-xs font-semibold text-warning">
               <CalendarClock className="mr-1 inline h-3.5 w-3.5" />
