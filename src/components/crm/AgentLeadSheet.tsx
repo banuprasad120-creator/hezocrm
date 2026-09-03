@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { History, MessageCircle, PhoneCall } from "lucide-react";
+import { Building2, CreditCard, Flame, History, MessageCircle, PhoneCall } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime, inr, type Lead } from "@/lib/crm";
+import { parseInterestedData } from "@/lib/interested-lead";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -34,6 +35,7 @@ export function AgentLeadSheet({
   onUpdate?: (lead: Lead) => void;
 }) {
   const leadId = lead?.id ?? "";
+  const interestedData = parseInterestedData(lead?.notes);
 
   const { data: calls = [] } = useQuery({
     queryKey: ["call-history", leadId],
@@ -123,6 +125,66 @@ export function AgentLeadSheet({
             <Row k="Loan type" v={lead.loan_type} />
             <Row k="Folder date" v={lead.folder_date} />
           </Section>
+
+          {interestedData && (
+            <Section title="Service Accepted & Existing Portfolio">
+              <div className="space-y-3 pt-1">
+                <div className="rounded-lg border bg-success/10 p-2.5 text-xs">
+                  <p className="font-bold text-success flex items-center gap-1">
+                    <Flame className="h-3.5 w-3.5 fill-success" /> Service Required: {interestedData.serviceRequired}
+                  </p>
+                  {interestedData.requiredAmount && (
+                    <p className="mt-0.5 text-foreground">
+                      Amount: <strong>{inr(Number(interestedData.requiredAmount))}</strong>
+                    </p>
+                  )}
+                  {interestedData.monthlyIncome && (
+                    <p className="text-muted-foreground">
+                      Income: ₹{Number(interestedData.monthlyIncome).toLocaleString("en-IN")}/mo {interestedData.employer ? `(${interestedData.employer})` : ""}
+                    </p>
+                  )}
+                </div>
+
+                {/* Existing Loans */}
+                <div className="rounded-lg border bg-muted/20 p-2.5 text-xs space-y-1">
+                  <p className="font-bold text-amber-500 flex items-center gap-1">
+                    <Building2 className="h-3.5 w-3.5" /> Existing Loans ({interestedData.hasExistingLoans ? interestedData.loans.length : 0})
+                  </p>
+                  {interestedData.hasExistingLoans && interestedData.loans.length > 0 ? (
+                    <div className="space-y-1 pt-1">
+                      {interestedData.loans.map((ln, i) => (
+                        <div key={i} className="flex justify-between border-b border-muted/50 pb-0.5 last:border-0">
+                          <span className="font-semibold">{ln.bank} ({ln.loanType})</span>
+                          <span className="text-muted-foreground">{ln.amount ? inr(Number(ln.amount)) : "—"} {ln.emi ? `· EMI ${inr(Number(ln.emi))}` : ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground">No existing loans</p>
+                  )}
+                </div>
+
+                {/* Existing Credit Cards */}
+                <div className="rounded-lg border bg-muted/20 p-2.5 text-xs space-y-1">
+                  <p className="font-bold text-sky-500 flex items-center gap-1">
+                    <CreditCard className="h-3.5 w-3.5" /> Credit Cards ({interestedData.hasCreditCards ? interestedData.creditCards.length : 0})
+                  </p>
+                  {interestedData.hasCreditCards && interestedData.creditCards.length > 0 ? (
+                    <div className="space-y-1 pt-1">
+                      {interestedData.creditCards.map((cd, i) => (
+                        <div key={i} className="flex justify-between border-b border-muted/50 pb-0.5 last:border-0">
+                          <span className="font-semibold">{cd.bank}</span>
+                          <span className="text-muted-foreground">{cd.limit ? `Limit: ${inr(Number(cd.limit))}` : ""} {cd.outstanding ? `· Due: ${inr(Number(cd.outstanding))}` : ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground">No credit cards</p>
+                  )}
+                </div>
+              </div>
+            </Section>
+          )}
 
           <Section title="Assignment">
             <Row k="Current status" v={<LeadStatusBadge status={lead.status} />} />

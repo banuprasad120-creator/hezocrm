@@ -21,6 +21,7 @@ import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppEmployeesRouteImport } from './routes/_app.employees'
 import { Route as AppFoldersRouteImport } from './routes/_app.folders'
 import { Route as AppFollowUpsRouteImport } from './routes/_app.follow-ups'
+import { Route as AppInterestedRouteImport } from './routes/_app.interested'
 import { Route as AppLeadsRouteImport } from './routes/_app.leads'
 import { Route as AppMonitoringRouteImport } from './routes/_app.monitoring'
 import { Route as AppMyLeadsRouteImport } from './routes/_app.my-leads'
@@ -90,6 +91,11 @@ const AppFollowUpsRoute = AppFollowUpsRouteImport.update({
   path: '/follow-ups',
   getParentRoute: () => AppRoute,
 } as any)
+const AppInterestedRoute = AppInterestedRouteImport.update({
+  id: '/interested',
+  path: '/interested',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppLeadsRoute = AppLeadsRouteImport.update({
   id: '/leads',
   path: '/leads',
@@ -148,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/employees': typeof AppEmployeesRoute
   '/folders': typeof AppFoldersRoute
   '/follow-ups': typeof AppFollowUpsRoute
+  '/interested': typeof AppInterestedRoute
   '/leads': typeof AppLeadsRoute
   '/monitoring': typeof AppMonitoringRoute
   '/my-leads': typeof AppMyLeadsRoute
@@ -170,6 +177,7 @@ export interface FileRoutesByTo {
   '/employees': typeof AppEmployeesRoute
   '/folders': typeof AppFoldersRoute
   '/follow-ups': typeof AppFollowUpsRoute
+  '/interested': typeof AppInterestedRoute
   '/leads': typeof AppLeadsRoute
   '/monitoring': typeof AppMonitoringRoute
   '/my-leads': typeof AppMyLeadsRoute
@@ -194,6 +202,7 @@ export interface FileRoutesById {
   '/_app/employees': typeof AppEmployeesRoute
   '/_app/folders': typeof AppFoldersRoute
   '/_app/follow-ups': typeof AppFollowUpsRoute
+  '/_app/interested': typeof AppInterestedRoute
   '/_app/leads': typeof AppLeadsRoute
   '/_app/monitoring': typeof AppMonitoringRoute
   '/_app/my-leads': typeof AppMyLeadsRoute
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/employees'
     | '/folders'
     | '/follow-ups'
+    | '/interested'
     | '/leads'
     | '/monitoring'
     | '/my-leads'
@@ -240,6 +250,7 @@ export interface FileRouteTypes {
     | '/employees'
     | '/folders'
     | '/follow-ups'
+    | '/interested'
     | '/leads'
     | '/monitoring'
     | '/my-leads'
@@ -263,6 +274,7 @@ export interface FileRouteTypes {
     | '/_app/employees'
     | '/_app/folders'
     | '/_app/follow-ups'
+    | '/_app/interested'
     | '/_app/leads'
     | '/_app/monitoring'
     | '/_app/my-leads'
@@ -365,6 +377,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFollowUpsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/interested': {
+      id: '/_app/interested'
+      path: '/interested'
+      fullPath: '/interested'
+      preLoaderRoute: typeof AppInterestedRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/leads': {
       id: '/_app/leads'
       path: '/leads'
@@ -442,6 +461,7 @@ interface AppRouteChildren {
   AppEmployeesRoute: typeof AppEmployeesRoute
   AppFoldersRoute: typeof AppFoldersRoute
   AppFollowUpsRoute: typeof AppFollowUpsRoute
+  AppInterestedRoute: typeof AppInterestedRoute
   AppLeadsRoute: typeof AppLeadsRoute
   AppMonitoringRoute: typeof AppMonitoringRoute
   AppMyLeadsRoute: typeof AppMyLeadsRoute
@@ -464,6 +484,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppEmployeesRoute: AppEmployeesRoute,
   AppFoldersRoute: AppFoldersRoute,
   AppFollowUpsRoute: AppFollowUpsRoute,
+  AppInterestedRoute: AppInterestedRoute,
   AppLeadsRoute: AppLeadsRoute,
   AppMonitoringRoute: AppMonitoringRoute,
   AppMyLeadsRoute: AppMyLeadsRoute,

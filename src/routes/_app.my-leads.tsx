@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
+import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, inr, type Lead } from "@/lib/crm";
@@ -34,6 +35,7 @@ function MyLeads() {
   const qc = useQueryClient();
   const [active, setActive] = useState<Lead | null>(null);
   const [viewLead, setViewLead] = useState<Lead | null>(null);
+  const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
 
   /* ── Fetch all assigned leads ── */
   const { data: leads = [], isLoading, refetch } = useQuery({
@@ -173,7 +175,7 @@ function MyLeads() {
                 onView={() => setViewLead(currentLead)}
                 onUpdate={() => setActive(currentLead)}
                 onOutOfService={() => outOfServiceM.mutate(currentLead)}
-                onInterested={() => interestedM.mutate(currentLead)}
+                onInterested={() => setInterestedLead(currentLead)}
               />
             </div>
           ) : (
@@ -210,7 +212,7 @@ function MyLeads() {
                       </div>
                       {l.status === "Interested" && (
                         <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-success">
-                          <Star className="h-3.5 w-3.5 fill-success" /> Interested
+                          <Flame className="h-3.5 w-3.5 fill-success" /> Interested
                         </p>
                       )}
                       {followUpByLead.get(l.id) && (
@@ -239,6 +241,17 @@ function MyLeads() {
         employeeId={userId ?? ""}
         open={Boolean(active)}
         onOpenChange={(o) => !o && setActive(null)}
+      />
+
+      <InterestedLeadDialog
+        lead={interestedLead}
+        employeeId={userId ?? ""}
+        open={Boolean(interestedLead)}
+        onOpenChange={(o) => !o && setInterestedLead(null)}
+        onSuccess={() => {
+          setInterestedLead(null);
+          refetch();
+        }}
       />
     </>
   );

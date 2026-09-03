@@ -1,7 +1,7 @@
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, History, PhoneCall } from "lucide-react";
+import { ArrowLeft, Building2, CreditCard, Flame, History, PhoneCall } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { formatDateTime, inr, type Lead } from "@/lib/crm";
+import { parseInterestedData } from "@/lib/interested-lead";
 
 export const Route = createFileRoute("/_app/lead/$leadId")({
   head: () => ({
@@ -37,6 +38,8 @@ function LeadDetail() {
       return data as Lead | null;
     },
   });
+
+  const interestedData = parseInterestedData(lead?.notes);
 
   const { data: calls = [] } = useQuery({
     queryKey: ["call-history", leadId],
@@ -123,6 +126,65 @@ function LeadDetail() {
               <Row k="Last call" v={lead.last_call_at ? formatDateTime(lead.last_call_at) : "Never"} />
             </dl>
           </div>
+
+          {interestedData && (
+            <div className="rounded-2xl border bg-card p-5 card-elevated space-y-3">
+              <p className="text-sm font-semibold flex items-center gap-1.5 text-success">
+                <Flame className="h-4 w-4 fill-success" /> Service Accepted Portfolio
+              </p>
+
+              <div className="rounded-xl border bg-success/10 p-3 text-xs space-y-1">
+                <p className="font-bold text-success">Requirement: {interestedData.serviceRequired}</p>
+                {interestedData.requiredAmount && (
+                  <p className="text-foreground">Required Amount: <strong>{inr(Number(interestedData.requiredAmount))}</strong></p>
+                )}
+                {interestedData.monthlyIncome && (
+                  <p className="text-muted-foreground">Monthly Income: ₹{Number(interestedData.monthlyIncome).toLocaleString("en-IN")}</p>
+                )}
+                {interestedData.employer && (
+                  <p className="text-muted-foreground">Employer: {interestedData.employer}</p>
+                )}
+              </div>
+
+              {/* Loans */}
+              <div className="rounded-xl border bg-muted/20 p-3 text-xs space-y-1.5">
+                <p className="font-bold text-amber-500 flex items-center gap-1">
+                  <Building2 className="h-3.5 w-3.5" /> Existing Loans ({interestedData.hasExistingLoans ? interestedData.loans.length : 0})
+                </p>
+                {interestedData.hasExistingLoans && interestedData.loans.length > 0 ? (
+                  <div className="space-y-1 pt-1">
+                    {interestedData.loans.map((ln, i) => (
+                      <div key={i} className="flex items-center justify-between border-b border-muted/50 pb-1 last:border-0 last:pb-0">
+                        <span className="font-semibold">{ln.bank} ({ln.loanType})</span>
+                        <span className="text-muted-foreground font-mono">{ln.amount ? inr(Number(ln.amount)) : "—"} {ln.emi ? `· EMI: ${inr(Number(ln.emi))}` : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No existing loans</p>
+                )}
+              </div>
+
+              {/* Credit Cards */}
+              <div className="rounded-xl border bg-muted/20 p-3 text-xs space-y-1.5">
+                <p className="font-bold text-sky-500 flex items-center gap-1">
+                  <CreditCard className="h-3.5 w-3.5" /> Existing Credit Cards ({interestedData.hasCreditCards ? interestedData.creditCards.length : 0})
+                </p>
+                {interestedData.hasCreditCards && interestedData.creditCards.length > 0 ? (
+                  <div className="space-y-1 pt-1">
+                    {interestedData.creditCards.map((cd, i) => (
+                      <div key={i} className="flex items-center justify-between border-b border-muted/50 pb-1 last:border-0 last:pb-0">
+                        <span className="font-semibold">{cd.bank}</span>
+                        <span className="text-muted-foreground font-mono">{cd.limit ? `Limit: ${inr(Number(cd.limit))}` : ""} {cd.outstanding ? `· Due: ${inr(Number(cd.outstanding))}` : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No credit cards</p>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="rounded-2xl border bg-card p-5 card-elevated">
             <p className="text-sm font-semibold">Follow-ups</p>

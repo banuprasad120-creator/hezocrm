@@ -2,7 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard, Users, PhoneCall, CalendarClock, Activity,
   BarChart3, Settings, UserCircle2, FolderPlus, ListChecks,
-  Building2, IdCard, FolderKanban, ArrowLeftRight,
+  Building2, IdCard, FolderKanban, ArrowLeftRight, Flame,
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { cn } from "@/lib/utils";
@@ -29,6 +29,7 @@ const adminGroups: NavGroup[] = [
     items: [
       { to: "/daily-leads", title: "Daily Leads", icon: FolderPlus },
       { to: "/leads", title: "All Leads", icon: PhoneCall },
+      { to: "/interested", title: "Interested Leads", icon: Flame },
       { to: "/follow-ups", title: "Follow-ups", icon: CalendarClock },
       { to: "/agents", title: "Agents", icon: Users },
       { to: "/attendance", title: "Attendance", icon: CalendarClock },
@@ -57,6 +58,7 @@ const agentGroups: NavGroup[] = [
     label: "My Work",
     items: [
       { to: "/my-leads", title: "My Leads", icon: ListChecks },
+      { to: "/interested", title: "Interested Leads", icon: Flame },
       { to: "/follow-ups", title: "Follow-ups", icon: CalendarClock },
       { to: "/attendance", title: "Attendance", icon: CalendarClock },
     ],
