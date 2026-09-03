@@ -43,6 +43,7 @@ function LeadsPage() {
   const [term, setTerm] = useState("");
   const [status, setStatus] = useState("all");
   const [loanType, setLoanType] = useState("all");
+  const [filterAgent, setFilterAgent] = useState("all");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignAgent, setAssignAgent] = useState("");
@@ -65,13 +66,14 @@ function LeadsPage() {
     let out = query.eq("company_id", companyId!);
     if (status !== "all") out = out.eq("status", status);
     if (loanType !== "all") out = out.eq("loan_type", loanType);
+    if (filterAgent === "unassigned") out = out.is("assigned_to", null);
+    else if (filterAgent !== "all") out = out.eq("assigned_to", filterAgent);
     if (term) {
       const like = `%${term.replace(/[,()%]/g, " ")}%`;
       out = out.or(`customer_name.ilike.${like},mobile.ilike.${like},city.ilike.${like}`);
     }
     return out;
   };
-
 
   const { data: stats } = useQuery({
     queryKey: ["all-leads-stats", companyId],
@@ -94,7 +96,7 @@ function LeadsPage() {
   });
 
   const { data: pageData, isFetching } = useQuery({
-    queryKey: ["all-leads", companyId, term, status, loanType, page],
+    queryKey: ["all-leads", companyId, term, status, loanType, filterAgent, page],
     enabled: Boolean(companyId) && isAdmin,
     queryFn: async () => {
       const { data, error, count } = await applyFilters(supabase.from("leads").select("*", { count: "exact" }))
@@ -108,6 +110,36 @@ function LeadsPage() {
   const rows = pageData?.rows ?? [];
   const totalRows = pageData?.count ?? 0;
   const pageCount = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+
+  const assignSingleLead = async (leadId: string, newAgentId: string) => {
+    try {
+      const now = new Date().toISOString();
+      const isAssigned = Boolean(newAgentId);
+      const { error } = await supabase
+        .from("leads")
+        .update({
+          assigned_to: isAssigned ? newAgentId : null,
+          assigned_at: isAssigned ? now : null,
+          status: isAssigned ? "Assigned" : "New",
+        })
+        .eq("id", leadId);
+      if (error) throw error;
+
+      if (isAssigned) {
+        await supabase.from("lead_assignments").insert({
+          lead_id: leadId,
+          company_id: companyId!,
+          employee_id: newAgentId,
+          assigned_by: session?.userId ?? null,
+        });
+      }
+      toast.success(isAssigned ? "Lead assigned to agent!" : "Lead unassigned");
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
+      qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+    } catch (e) {
+      toast.error("Could not update assignment", { description: e instanceof Error ? e.message : undefined });
+    }
+  };
 
   const agentName = useMemo(() => {
     const map = new Map(agents.map((a) => [a.id, a.full_name || a.email]));
@@ -229,19 +261,27 @@ function LeadsPage() {
                 className="h-10 bg-elevated pl-9 text-xs sm:text-sm"
               />
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:flex">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
               <Select value={status} onValueChange={(v) => { setStatus(v); setPage(0); }}>
-                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-44 sm:text-sm"><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-40 sm:text-sm"><SelectValue placeholder="Status" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
                   {LEAD_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={loanType} onValueChange={(v) => { setLoanType(v); setPage(0); }}>
-                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-44 sm:text-sm"><SelectValue placeholder="Loan type" /></SelectTrigger>
+                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-40 sm:text-sm"><SelectValue placeholder="Loan type" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All loan types</SelectItem>
                   {LOAN_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={filterAgent} onValueChange={(v) => { setFilterAgent(v); setPage(0); }}>
+                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-44 sm:text-sm font-medium"><SelectValue placeholder="Agent" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Agents</SelectItem>
+                  <SelectItem value="unassigned">Unassigned Only</SelectItem>
+                  {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.full_name || a.email}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -257,8 +297,8 @@ function LeadsPage() {
                 </SelectContent>
               </Select>
               <div className="flex items-center gap-2">
-                <Button size="sm" className="gradient-brand text-white" disabled={busy || !assignAgent} onClick={assignSelected}>
-                  <Users2 className="mr-1.5 h-4 w-4" /> Assign
+                <Button size="sm" className="gradient-brand text-white font-bold" disabled={busy || !assignAgent} onClick={assignSelected}>
+                  <Users2 className="mr-1.5 h-4 w-4" /> Assign Selected ({selected.size})
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
               </div>
@@ -298,10 +338,10 @@ function LeadsPage() {
                   <div
                     key={l.id}
                     onClick={() => navigate({ to: "/lead/$leadId", params: { leadId: l.id } })}
-                    className="flex flex-col gap-2.5 p-4 transition-colors hover:bg-elevated/70 touch-tap"
+                    className="flex flex-col gap-2.5 p-4 transition-colors hover:bg-elevated/50 touch-tap"
                   >
                     <div className="flex items-start gap-3">
-                      <div onClick={(e) => e.stopPropagation()} className="pt-0.5">
+                      <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>
                         <Checkbox checked={selected.has(l.id)} onCheckedChange={() => toggle(l.id)} />
                       </div>
                       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border bg-elevated text-xs font-bold text-brand">
@@ -318,24 +358,38 @@ function LeadsPage() {
                           <span className="text-muted-foreground">· {l.loan_type}</span>
                           {l.city && <span className="text-muted-foreground">· {l.city}</span>}
                         </div>
-                        {l.assigned_to && (
-                          <p className="mt-1 text-[11px] text-muted-foreground">Agent: {agentName(l.assigned_to)}</p>
-                        )}
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-end gap-1 border-t pt-2" onClick={(e) => e.stopPropagation()}>
-                      <Button asChild variant="outline" size="sm" className="h-8 gap-1 text-xs">
-                        <a href={`tel:${l.mobile}`}><Phone className="h-3.5 w-3.5 text-brand" /> Call</a>
-                      </Button>
-                      <Button asChild variant="outline" size="sm" className="h-8 gap-1 text-xs">
-                        <a href={`https://wa.me/${l.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
-                          <MessageCircle className="h-3.5 w-3.5 text-success" /> WhatsApp
-                        </a>
-                      </Button>
-                      <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="Open lead">
-                        <Link to="/lead/$leadId" params={{ leadId: l.id }}><Eye className="h-4 w-4" /></Link>
-                      </Button>
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="w-36">
+                        <Select
+                          value={l.assigned_to || "unassigned"}
+                          onValueChange={(val) => assignSingleLead(l.id, val === "unassigned" ? "" : val)}
+                        >
+                          <SelectTrigger className="h-7 text-[11px] bg-card"><SelectValue placeholder="Assign..." /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unassigned">Unassigned</SelectItem>
+                            {agents.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>{a.full_name || a.email}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <Button asChild variant="outline" size="sm" className="h-8 gap-1 text-xs">
+                          <a href={`tel:${l.mobile}`}><Phone className="h-3.5 w-3.5 text-brand" /> Call</a>
+                        </Button>
+                        <Button asChild variant="outline" size="sm" className="h-8 gap-1 text-xs">
+                          <a href={`https://wa.me/${l.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+                            <MessageCircle className="h-3.5 w-3.5 text-success" /> WhatsApp
+                          </a>
+                        </Button>
+                        <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="Open lead">
+                          <Link to="/lead/$leadId" params={{ leadId: l.id }}><Eye className="h-4 w-4" /></Link>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -389,7 +443,22 @@ function LeadsPage() {
                         <td className="hidden px-4 py-2.5 text-muted-foreground xl:table-cell">{l.city || "—"}</td>
                         <td className="hidden px-4 py-2.5 text-muted-foreground 2xl:table-cell">{l.folder_date}</td>
                         <td className="px-4 py-2.5"><LeadStatusBadge status={l.status} /></td>
-                        <td className="hidden px-4 py-2.5 text-muted-foreground lg:table-cell">{agentName(l.assigned_to)}</td>
+                        <td className="hidden px-4 py-2.5 lg:table-cell" onClick={(e) => e.stopPropagation()}>
+                          <Select
+                            value={l.assigned_to || "unassigned"}
+                            onValueChange={(val) => assignSingleLead(l.id, val === "unassigned" ? "" : val)}
+                          >
+                            <SelectTrigger className="h-7 text-xs w-36 border-muted bg-card/80 font-medium">
+                              <SelectValue placeholder="Assign agent..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="unassigned" className="text-muted-foreground">Unassigned</SelectItem>
+                              {agents.map((a) => (
+                                <SelectItem key={a.id} value={a.id}>{a.full_name || a.email}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </td>
                         <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                           <div className="flex justify-end gap-1">
                             <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="Call">
