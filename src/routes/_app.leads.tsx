@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download, Inbox, Loader2, MessageCircle, Phone, Search, Upload, Users2, Eye,
-  Clock, Flame, PhoneCall, CheckCircle2,
+  Clock, Flame, PhoneCall, CheckCircle2, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -58,6 +58,26 @@ function LeadsPage() {
     const id = window.setTimeout(() => { setTerm(q.trim()); setPage(0); }, 250);
     return () => window.clearTimeout(id);
   }, [q]);
+
+  // Live Realtime listener: immediately updates the table whenever any lead changes
+  useEffect(() => {
+    if (!companyId) return;
+    const channel = supabase
+      .channel(`leads-live-${companyId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "leads", filter: `company_id=eq.${companyId}` },
+        () => {
+          qc.invalidateQueries({ queryKey: ["all-leads"] });
+          qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [companyId, qc]);
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
@@ -229,6 +249,18 @@ function LeadsPage() {
         description="Every lead in your company — search, filter, assign and export."
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={() => {
+                qc.invalidateQueries({ queryKey: ["all-leads"] });
+                qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+                toast.success("Leads refreshed");
+              }}
+            >
+              <RefreshCw className="mr-1.5 h-4 w-4" /> Refresh
+            </Button>
             <Button variant="outline" size="sm" className="h-9" onClick={() => setImportOpen(true)}>
               <Upload className="mr-1.5 h-4 w-4" /> Import
             </Button>
