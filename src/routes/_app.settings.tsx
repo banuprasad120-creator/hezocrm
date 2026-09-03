@@ -11,11 +11,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useTheme } from "@/components/theme-provider";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import {
-  getCompanyBatchSettings, updateCompanyBatchSettings, getBatchAuditLogs, type LeadBatch,
+  getCompanyBatchSettings, updateCompanyBatchSettings, getBatchAuditLogs, allocateNextLeadBatch, type LeadBatch,
 } from "@/lib/lead-batch";
+import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime } from "@/lib/crm";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Sparkles, Zap, ShieldCheck } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles, Zap, ShieldCheck, PlayCircle } from "lucide-react";
 
 export const Route = createFileRoute("/_app/settings")({
   head: () => ({ meta: [{ title: "Settings — Hezo CRM" }, { name: "description", content: "Company, theme, lead batch allocation and notification preferences." }] }),
@@ -53,6 +54,7 @@ function SettingsPage() {
   const [automationEnabled, setAutomationEnabled] = useState(true);
   const [batchSize, setBatchSize] = useState("100");
   const [savingBatch, setSavingBatch] = useState(false);
+  const [testingAgentId, setTestingAgentId] = useState<string | null>(null);
 
   useEffect(() => {
     if (batchSettings) {
@@ -60,6 +62,32 @@ function SettingsPage() {
       setBatchSize(String(batchSettings.batchSize || 100));
     }
   }, [batchSettings]);
+
+  // Query agent pending lead counts
+  const { data: agentLeadStats = {}, refetch: refetchAgentStats } = useQuery({
+    queryKey: ["agent-batch-diagnostics", companyId],
+    enabled: Boolean(companyId && isAdmin),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("leads")
+        .select("assigned_to, status")
+        .eq("company_id", companyId!);
+
+      if (error) throw error;
+      const stats: Record<string, { total: number; pending: number; completed: number }> = {};
+      for (const l of data ?? []) {
+        if (!l.assigned_to) continue;
+        if (!stats[l.assigned_to]) stats[l.assigned_to] = { total: 0, pending: 0, completed: 0 };
+        stats[l.assigned_to].total += 1;
+        if (l.status === "New" || l.status === "Assigned") {
+          stats[l.assigned_to].pending += 1;
+        } else {
+          stats[l.assigned_to].completed += 1;
+        }
+      }
+      return stats;
+    },
+  });
 
   // Batch audit logs
   const { data: auditLogs = [], isLoading: logsLoading, refetch: refetchLogs } = useQuery({
@@ -81,6 +109,27 @@ function SettingsPage() {
       toast.error("Failed to update settings", { description: e instanceof Error ? e.message : undefined });
     } finally {
       setSavingBatch(false);
+    }
+  };
+
+  const handleTestRefill = async (agentId: string, agentName: string) => {
+    if (!companyId) return;
+    setTestingAgentId(agentId);
+    console.log(`[REFILL] Test Refill requested for agent: ${agentName} (${agentId})`);
+    try {
+      const res = await allocateNextLeadBatch(companyId, agentId, Number(batchSize) || 100, "ADMIN_TEST_REFILL");
+      console.log(`[REFILL] Result:`, res);
+      if (res.success && res.assigned_count && res.assigned_count > 0) {
+        toast.success(`🎉 Refill successful: ${res.assigned_count} leads assigned in Batch #${res.batch_number || 1}!`);
+        qc.invalidateQueries();
+      } else {
+        toast.info(res.message || "Agent already has active leads or no unassigned leads are available.");
+      }
+    } catch (e) {
+      console.error(`[REFILL BLOCKED] Error:`, e);
+      toast.error(e instanceof Error ? e.message : "Test refill failed");
+    } finally {
+      setTestingAgentId(null);
     }
   };
 
@@ -168,6 +217,86 @@ function SettingsPage() {
               </div>
             )}
           </div>
+
+          {/* ── Agent Diagnostics & Manual Test Refill ── */}
+          {isAdmin && (
+            <div className="rounded-2xl border bg-card p-4 card-elevated sm:p-6 space-y-4">
+              <div className="flex items-center justify-between border-b pb-3">
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-foreground flex items-center gap-2">
+                    <PlayCircle className="h-4 w-4 text-brand" /> Agent Batch Status & Test Refill
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Live batch state per agent. Click "Test Refill" to test allocating a new batch to any agent with 0 pending leads.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => refetchAgentStats()}
+                  className="h-8 text-xs"
+                >
+                  <RefreshCw className="mr-1 h-3.5 w-3.5" /> Refresh
+                </Button>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-[13px]">
+                  <thead className="bg-muted/30 text-left text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2.5">Agent</th>
+                      <th className="px-3 py-2.5">Pending Leads</th>
+                      <th className="px-3 py-2.5">Completed Leads</th>
+                      <th className="px-3 py-2.5">Batch Status</th>
+                      <th className="px-3 py-2.5 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {agents.map((a) => {
+                      const st = agentLeadStats[a.id] || { total: 0, pending: 0, completed: 0 };
+                      const isTesting = testingAgentId === a.id;
+                      return (
+                        <tr key={a.id} className="hover:bg-muted/20">
+                          <td className="px-3 py-2.5 font-semibold text-foreground">
+                            {a.full_name || a.email}
+                          </td>
+                          <td className="px-3 py-2.5 font-bold font-mono">
+                            <span className={st.pending === 0 ? "text-success font-bold" : "text-brand font-bold"}>
+                              {st.pending} pending
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-muted-foreground">
+                            {st.completed} called
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              st.pending === 0
+                                ? "bg-success/15 text-success border border-success/30"
+                                : "bg-brand/10 text-brand border border-brand/20"
+                            }`}>
+                              {st.pending === 0 ? "READY FOR NEXT BATCH" : "WORKING ON BATCH"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={isTesting}
+                              onClick={() => handleTestRefill(a.id, a.full_name || a.email)}
+                              className="h-8 text-xs font-bold border-brand/40 text-brand hover:bg-brand/10"
+                            >
+                              {isTesting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1 h-3.5 w-3.5 fill-brand" />}
+                              Test Refill (+{batchSize})
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* ── Batch Allocation Audit Logs ── */}
           <div className="rounded-2xl border bg-card p-4 card-elevated sm:p-6 space-y-4">
