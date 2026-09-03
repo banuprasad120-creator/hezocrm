@@ -150,13 +150,14 @@ function DailyLeads() {
     setSelected(selected.size === visibleLeads.length ? new Set() : new Set(visibleLeads.map((l) => l.id)));
   };
 
-  /** Fetch every lead id in the current folder, paged, so distribution covers all rows. */
+  /** Fetch every UNASSIGNED lead id in the current folder so distribution never reassigns already-assigned leads. */
   const fetchFolderLeadIds = async () => {
     const ids: string[] = [];
     const chunk = 1000;
     for (let from = 0; ; from += chunk) {
       const { data, error } = await supabase.from("leads").select("id")
         .eq("company_id", companyId!).eq("folder_date", folderDate)
+        .is("assigned_to", null)  // Only unassigned leads
         .order("created_at", { ascending: true }).range(from, from + chunk - 1);
       if (error) throw error;
       ids.push(...(data ?? []).map((r) => r.id));
@@ -173,8 +174,10 @@ function DailyLeads() {
         .update({ assigned_to: agentId, assigned_at: now, status: "Assigned" })
         .in("id", slice).eq("company_id", companyId!);
       if (error) throw error;
-      const { error: aErr } = await supabase.from("lead_assignments").insert(
+      // Use upsert on lead_id to prevent duplicate assignment history records
+      const { error: aErr } = await supabase.from("lead_assignments").upsert(
         slice.map((id) => ({ lead_id: id, company_id: companyId!, employee_id: agentId, assigned_by: session!.userId! })),
+        { onConflict: "lead_id" },
       );
       if (aErr) throw aErr;
     }
