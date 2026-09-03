@@ -166,7 +166,20 @@ function MyLeads() {
     if (!companyId || !userId || claiming) return;
     setClaiming(true);
     try {
-      // 1. Find unassigned leads in this company (from latest folder)
+      // 1. Fetch all mobile numbers that have EVER been assigned or called in the company
+      const { data: historyLeads } = await supabase
+        .from("leads")
+        .select("mobile")
+        .eq("company_id", companyId)
+        .or("assigned_to.not.is.null,last_call_at.not.is.null,status.neq.New");
+
+      const alreadySentMobiles = new Set<string>();
+      for (const item of historyLeads ?? []) {
+        const clean = (item.mobile || "").replace(/\D/g, "").slice(-10);
+        if (clean) alreadySentMobiles.add(clean);
+      }
+
+      // 2. Find fresh unassigned leads in this company (from latest folder)
       const { data: unassigned, error } = await supabase
         .from("leads")
         .select("id, mobile")
@@ -174,20 +187,23 @@ function MyLeads() {
         .is("assigned_to", null)
         .order("folder_date", { ascending: false })
         .order("created_at", { ascending: true })
-        .limit(count * 3);
+        .limit(count * 5);
 
       if (error) throw error;
       if (!unassigned || unassigned.length === 0) {
-        if (!isAutomatic) toast.info("No unassigned leads available in company folders right now.");
+        if (!isAutomatic) toast.info("No fresh unassigned leads available in company folders right now.");
         return;
       }
 
-      // Deduplicate by clean mobile number
+      // Deduplicate by clean mobile number AND strictly exclude already sent numbers
       const seen = new Set<string>();
       const idsToClaim: string[] = [];
       for (const item of unassigned) {
         const cleanMob = (item.mobile || "").replace(/\D/g, "").slice(-10);
         if (cleanMob) {
+          // STRICT RULE: Never re-send numbers that have ever been assigned or called to any agent!
+          if (alreadySentMobiles.has(cleanMob)) continue;
+
           if (!seen.has(cleanMob)) {
             seen.add(cleanMob);
             idsToClaim.push(item.id);
@@ -200,7 +216,7 @@ function MyLeads() {
       }
 
       if (idsToClaim.length === 0) {
-        if (!isAutomatic) toast.info("No unique leads available right now.");
+        if (!isAutomatic) toast.info("All available leads in this folder have already been contacted. Please import fresh leads.");
         return;
       }
 

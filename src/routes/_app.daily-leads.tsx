@@ -150,8 +150,21 @@ function DailyLeads() {
     setSelected(selected.size === visibleLeads.length ? new Set() : new Set(visibleLeads.map((l) => l.id)));
   };
 
-  /** Fetch unique UNASSIGNED lead ids in the current folder, deduplicating by mobile number so agents never get repeated numbers. */
+  /** Fetch unique UNASSIGNED lead ids in the current folder, strictly excluding any mobile number that has EVER been assigned or called in the company. */
   const fetchFolderLeadIds = async () => {
+    // 1. Fetch all mobile numbers already assigned or called in the company across ANY folder
+    const { data: historyLeads } = await supabase
+      .from("leads")
+      .select("mobile")
+      .eq("company_id", companyId!)
+      .or("assigned_to.not.is.null,last_call_at.not.is.null,status.neq.New");
+
+    const alreadySentMobiles = new Set<string>();
+    for (const item of historyLeads ?? []) {
+      const clean = (item.mobile || "").replace(/\D/g, "").slice(-10);
+      if (clean) alreadySentMobiles.add(clean);
+    }
+
     const ids: string[] = [];
     const seenMobiles = new Set<string>();
     const chunk = 1000;
@@ -164,6 +177,9 @@ function DailyLeads() {
       for (const r of data ?? []) {
         const cleanMobile = (r.mobile || "").replace(/\D/g, "").slice(-10);
         if (cleanMobile) {
+          // STRICT RULE: If this number has EVER been assigned or called in the company, NEVER send again!
+          if (alreadySentMobiles.has(cleanMobile)) continue;
+
           if (!seenMobiles.has(cleanMobile)) {
             seenMobiles.add(cleanMobile);
             ids.push(r.id);
