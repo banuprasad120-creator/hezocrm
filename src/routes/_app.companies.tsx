@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2, ChevronDown, ChevronRight, Loader2, PauseCircle, PlayCircle,
-  Plus, Search, ShieldCheck, UserPlus, Users,
+  Plus, Search, ShieldCheck, Trash2, UserPlus, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -95,6 +95,23 @@ function CompaniesPage() {
   const agentActiveM = useMutation({
     mutationFn: (v: { agentId: string; isActive: boolean }) => setAgentActive({ data: v }),
     onSuccess: () => { toast.success("Agent updated"); refresh(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const deleteM = useMutation({
+    mutationFn: async (companyId: string) => {
+      await supabase.from("leads").delete().eq("company_id", companyId);
+      await supabase.from("lead_imports").delete().eq("company_id", companyId);
+      await supabase.from("lead_folders").delete().eq("company_id", companyId);
+      await supabase.from("user_roles").delete().eq("company_id", companyId);
+      await supabase.from("profiles").delete().eq("company_id", companyId);
+      const { error } = await supabase.from("companies").delete().eq("id", companyId);
+      if (error) throw error;
+      return { ok: true };
+    },
+    onSuccess: () => {
+      toast.success("Company deleted");
+      refresh();
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -206,6 +223,19 @@ function CompaniesPage() {
                         {c.status === "Active"
                           ? <><PauseCircle className="mr-1 h-3.5 w-3.5" /> Suspend</>
                           : <><PlayCircle className="mr-1 h-3.5 w-3.5" /> Activate</>}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 hover:text-rose-600 border-rose-500/30"
+                        disabled={deleteM.isPending}
+                        onClick={() => {
+                          if (window.confirm(`Are you sure you want to delete company "${c.name}"? This will permanently delete its workspace and associated data.`)) {
+                            deleteM.mutate(c.id);
+                          }
+                        }}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete
                       </Button>
                     </div>
                   </div>
