@@ -68,30 +68,50 @@ function MyLeads() {
     return m;
   }, [followUps]);
 
+  /* ── Deduplicate leads by 10-digit mobile number so agent never sees repeated phone numbers ── */
+  const uniqueLeads = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Lead[] = [];
+    for (const l of leads) {
+      const cleanMob = (l.mobile || "").replace(/\D/g, "").slice(-10);
+      if (cleanMob) {
+        if (!seen.has(cleanMob)) {
+          seen.add(cleanMob);
+          out.push(l);
+        }
+      } else {
+        out.push(l);
+      }
+    }
+    return out;
+  }, [leads]);
+
   /* ── Stats ── */
   const stats = useMemo(() => {
-    const called = leads.filter((l) => CONTACTED_STATUSES.includes(l.status)).length;
+    const called = uniqueLeads.filter((l) => CONTACTED_STATUSES.includes(l.status)).length;
     return {
-      assigned: leads.length,
+      assigned: uniqueLeads.length,
       called,
-      pending: leads.length - called,
-      interested: leads.filter((l) => l.status === "Interested").length,
+      pending: uniqueLeads.length - called,
+      interested: uniqueLeads.filter((l) => l.status === "Interested").length,
     };
-  }, [leads]);
+  }, [uniqueLeads]);
 
   /* ── Current lead = first uncalled lead ── */
   const pendingLeads = useMemo(
-    () => leads.filter((l) => !CONTACTED_STATUSES.includes(l.status)),
-    [leads],
+    () => uniqueLeads.filter((l) => !CONTACTED_STATUSES.includes(l.status)),
+    [uniqueLeads],
   );
   const currentLead = pendingLeads[0] ?? null;
 
   /* ── "Out of Service" — marks lead Wrong Number and unassigns it ── */
   const outOfServiceM = useMutation({
     mutationFn: async (lead: Lead) => {
+      const cleanMobile = lead.mobile.trim();
       const { error } = await supabase.from("leads")
         .update({ status: "Wrong Number", assigned_to: null, last_call_at: new Date().toISOString() })
-        .eq("id", lead.id);
+        .eq("mobile", cleanMobile)
+        .eq("company_id", lead.company_id);
       if (error) throw error;
       // Log call history
       await supabase.from("call_history").insert({

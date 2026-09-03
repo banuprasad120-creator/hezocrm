@@ -150,17 +150,28 @@ function DailyLeads() {
     setSelected(selected.size === visibleLeads.length ? new Set() : new Set(visibleLeads.map((l) => l.id)));
   };
 
-  /** Fetch every UNASSIGNED lead id in the current folder so distribution never reassigns already-assigned leads. */
+  /** Fetch unique UNASSIGNED lead ids in the current folder, deduplicating by mobile number so agents never get repeated numbers. */
   const fetchFolderLeadIds = async () => {
     const ids: string[] = [];
+    const seenMobiles = new Set<string>();
     const chunk = 1000;
     for (let from = 0; ; from += chunk) {
-      const { data, error } = await supabase.from("leads").select("id")
+      const { data, error } = await supabase.from("leads").select("id, mobile")
         .eq("company_id", companyId!).eq("folder_date", folderDate)
         .is("assigned_to", null)  // Only unassigned leads
         .order("created_at", { ascending: true }).range(from, from + chunk - 1);
       if (error) throw error;
-      ids.push(...(data ?? []).map((r) => r.id));
+      for (const r of data ?? []) {
+        const cleanMobile = (r.mobile || "").replace(/\D/g, "").slice(-10);
+        if (cleanMobile) {
+          if (!seenMobiles.has(cleanMobile)) {
+            seenMobiles.add(cleanMobile);
+            ids.push(r.id);
+          }
+        } else {
+          ids.push(r.id);
+        }
+      }
       if (!data || data.length < chunk) break;
     }
     return ids;
@@ -204,8 +215,27 @@ function DailyLeads() {
     if (active.length === 0) return toast.error("No active agents");
     setBusy(true);
     try {
-      const pool = selected.size > 0 ? [...selected] : await fetchFolderLeadIds();
-      if (pool.length === 0) { toast.error("No leads to distribute"); return; }
+      let pool: string[] = [];
+      if (selected.size > 0) {
+        // Fetch mobile numbers for selected leads to deduplicate
+        const { data: selLeads } = await supabase.from("leads").select("id, mobile").in("id", [...selected]);
+        const seen = new Set<string>();
+        for (const l of selLeads ?? []) {
+          const cleanMobile = (l.mobile || "").replace(/\D/g, "").slice(-10);
+          if (cleanMobile) {
+            if (!seen.has(cleanMobile)) {
+              seen.add(cleanMobile);
+              pool.push(l.id);
+            }
+          } else {
+            pool.push(l.id);
+          }
+        }
+      } else {
+        pool = await fetchFolderLeadIds();
+      }
+
+      if (pool.length === 0) { toast.error("No unassigned unique leads to distribute"); return; }
       const now = new Date().toISOString();
       for (let i = 0; i < active.length; i++) {
         const agent = active[i]!;
@@ -213,7 +243,7 @@ function DailyLeads() {
         if (ids.length === 0) continue;
         await assignChunked(ids, agent.id, now);
       }
-      toast.success(`${pool.length} leads distributed across ${active.length} agents`);
+      toast.success(`${pool.length} unique leads distributed across ${active.length} agents`);
       setSelected(new Set());
       qc.invalidateQueries();
     } catch (err) {
