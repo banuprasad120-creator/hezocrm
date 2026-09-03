@@ -101,7 +101,6 @@ function CompaniesPage() {
     mutationFn: async (companyId: string) => {
       await supabase.from("leads").delete().eq("company_id", companyId);
       await supabase.from("lead_imports").delete().eq("company_id", companyId);
-      await supabase.from("lead_folders").delete().eq("company_id", companyId);
       await supabase.from("user_roles").delete().eq("company_id", companyId);
       await supabase.from("profiles").delete().eq("company_id", companyId);
       const { error } = await supabase.from("companies").delete().eq("id", companyId);
