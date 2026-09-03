@@ -57,7 +57,10 @@ function createSupabaseAdminClient() {
       storage: undefined,
       persistSession: false,
       autoRefreshToken: false,
-    }
+    },
+    realtime: {
+      transport: null,
+    } as any,
   });
 }
 

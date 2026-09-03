@@ -51,42 +51,37 @@ function CompaniesPage() {
     queryKey: ["companies-overview"],
     enabled: isSuper,
     queryFn: async () => {
-      try {
-        return await listCompanies();
-      } catch (err) {
-        console.warn("[companies] Server function fallback to client query", err);
-        const { data: companies, error: cErr } = await supabase
-          .from("companies").select("id, name, plan, status, created_at").order("created_at", { ascending: false });
-        if (cErr) throw cErr;
-        const { data: roles } = await supabase.from("user_roles").select("user_id, role, company_id");
-        const { data: profiles } = await supabase.from("profiles").select("id, full_name, email, is_active, company_id");
-        const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
-        
-        return Promise.all((companies ?? []).map(async (c) => {
-          const { count } = await supabase.from("leads").select("id", { count: "exact", head: true }).eq("company_id", c.id);
-          const companyRoles = (roles ?? []).filter((r) => r.company_id === c.id);
-          const agentIds = companyRoles.filter((r) => r.role === "agent").map((r) => r.user_id);
-          return {
-            id: c.id,
-            name: c.name,
-            plan: c.plan,
-            status: c.status,
-            createdAt: c.created_at,
-            adminCount: companyRoles.filter((r) => r.role === "company_admin").length,
-            agentCount: agentIds.length,
-            leadCount: count ?? 0,
-            agents: agentIds.map((id) => {
-              const p = profileById.get(id);
-              return {
-                id,
-                fullName: p?.full_name ?? "Unknown",
-                email: p?.email ?? "",
-                isActive: p?.is_active ?? true,
-              };
-            }).sort((a, b) => a.fullName.localeCompare(b.fullName)),
-          };
-        }));
-      }
+      const { data: companies, error: cErr } = await supabase
+        .from("companies").select("id, name, plan, status, created_at").order("created_at", { ascending: false });
+      if (cErr) throw cErr;
+      const { data: roles } = await supabase.from("user_roles").select("user_id, role, company_id");
+      const { data: profiles } = await supabase.from("profiles").select("id, full_name, email, is_active, company_id");
+      const profileById = new Map((profiles ?? []).map((p) => [p.id, p]));
+      
+      return Promise.all((companies ?? []).map(async (c) => {
+        const { count } = await supabase.from("leads").select("id", { count: "exact", head: true }).eq("company_id", c.id);
+        const companyRoles = (roles ?? []).filter((r) => r.company_id === c.id);
+        const agentIds = companyRoles.filter((r) => r.role === "agent").map((r) => r.user_id);
+        return {
+          id: c.id,
+          name: c.name,
+          plan: c.plan,
+          status: c.status,
+          createdAt: c.created_at,
+          adminCount: companyRoles.filter((r) => r.role === "company_admin").length,
+          agentCount: agentIds.length,
+          leadCount: count ?? 0,
+          agents: agentIds.map((id) => {
+            const p = profileById.get(id);
+            return {
+              id,
+              fullName: p?.full_name ?? "Unknown",
+              email: p?.email ?? "",
+              isActive: p?.is_active ?? true,
+            };
+          }).sort((a, b) => a.fullName.localeCompare(b.fullName)),
+        };
+      }));
     },
   });
 
