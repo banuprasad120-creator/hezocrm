@@ -101,6 +101,36 @@ function DailyDiaryPage() {
     return { total, hot, todayTargets, totalValue };
   }, [diaryLeads]);
 
+  const exportCsv = () => {
+    if (filteredLeads.length === 0) {
+      toast.info("No diary leads to export");
+      return;
+    }
+    const cols = ["Customer Name", "Mobile", "Loan Type", "Loan Amount", "City", "Status", "Diary Priority", "Target Date", "Diary Notes", "Folder Date"];
+    const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = filteredLeads.map((l) => [
+      escape(l.customer_name),
+      escape(l.mobile),
+      escape(l.loan_type),
+      escape(l.loan_amount || 0),
+      escape(l.city || ""),
+      escape(l.status),
+      escape(l.diaryData?.priority || "HIGH"),
+      escape(l.diaryData?.targetDate || ""),
+      escape(l.diaryData?.notes || ""),
+      escape(l.folder_date),
+    ].join(","));
+    const csv = [cols.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hezo-diary-leads-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filteredLeads.length} diary leads`);
+  };
+
   return (
     <>
       <PageHeader
@@ -115,6 +145,9 @@ function DailyDiaryPage() {
             >
               <UserPlus className="h-4 w-4" />
               + Add New Lead
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportCsv} className="h-9">
+              <Download className="mr-1.5 h-3.5 w-3.5" /> Export CSV
             </Button>
             <Button variant="outline" size="sm" onClick={() => refetch()} className="h-9">
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Refresh
