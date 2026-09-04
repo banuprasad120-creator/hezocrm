@@ -84,3 +84,33 @@ export const createAgent = createServerFn({ method: "POST" })
 
     return { agentId };
   });
+
+const updateAgentPhoneSchema = z.object({
+  agentId: z.string(),
+  phone: z.string().optional().nullable(),
+});
+
+/** Company admin updates an agent's calling / phone number. */
+export const updateAgentPhone = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => updateAgentPhoneSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { data: roles, error: roleErr } = await context.supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", context.userId);
+    if (roleErr) throw new Error(roleErr.message);
+    const isAdmin = (roles ?? []).some(
+      (r) => r.role === "company_admin" || r.role === "super_admin",
+    );
+    if (!isAdmin) throw new Error("Forbidden: only company admins can update agent numbers");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error: updateErr } = await supabaseAdmin
+      .from("profiles")
+      .update({ phone: data.phone ? data.phone.trim() : null })
+      .eq("id", data.agentId);
+    if (updateErr) throw new Error(updateErr.message);
+
+    return { success: true };
+  });

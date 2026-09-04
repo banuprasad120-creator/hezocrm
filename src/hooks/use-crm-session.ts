@@ -73,11 +73,11 @@ export function useAgents(companyId: string | null | undefined, enabled = true) 
           .from("user_roles").select("user_id").eq("role", "agent").eq("company_id", companyId!);
         if (error) return [];
         const ids = (roleRows ?? []).map((r) => r.user_id);
-        if (ids.length === 0) return [] as { id: string; full_name: string; email: string; is_active: boolean }[];
+        if (ids.length === 0) return [] as { id: string; full_name: string; email: string; phone?: string | null; is_active: boolean }[];
         const { data: profiles, error: pErr } = await supabase
-          .from("profiles").select("id, full_name, email, is_active").in("id", ids).order("full_name");
+          .from("profiles").select("id, full_name, email, phone, is_active").in("id", ids).order("full_name");
         if (pErr) return [];
-        return profiles ?? [];
+        return (profiles ?? []) as { id: string; full_name: string; email: string; phone: string | null; is_active: boolean }[];
       } catch (err) {
         console.warn("[useAgents] issue fetching agents:", err);
         return [];

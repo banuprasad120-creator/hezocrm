@@ -7,7 +7,11 @@ import netlify from "@netlify/vite-plugin-tanstack-start";
 
 export default defineConfig({
   plugins: [
-    netlify(),
+    netlify({
+      dev: {
+        edgeFunctions: { enabled: false },
+      },
+    }),
     tanstackStart({
       server: { entry: "server" },
     }),
