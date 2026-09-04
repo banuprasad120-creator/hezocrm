@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, CheckCircle2, Clock, Flame, Loader2, MessageCircle,
   PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff, Zap, Sparkles,
-  Award, ShieldCheck, UserPlus, Plus,
+  Award, ShieldCheck, UserPlus, Plus, BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -17,7 +17,10 @@ import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
+import { DiaryDialog } from "@/components/crm/DiaryDialog";
 import { parseInterestedData } from "@/lib/interested-lead";
+import { isDiaryLead, parseDiaryData } from "@/lib/diary";
+import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,6 +51,7 @@ function MyLeads() {
   const [active, setActive] = useState<Lead | null>(null);
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
+  const [diaryLead, setDiaryLead] = useState<Lead | null>(null);
   const [createInterestedOpen, setCreateInterestedOpen] = useState(false);
   const [createLeadOpen, setCreateLeadOpen] = useState(false);
   const [autoRefill, setAutoRefill] = useState(true);
@@ -414,6 +418,7 @@ function MyLeads() {
                 onUpdate={() => setActive(currentLead)}
                 onOutOfService={() => outOfServiceM.mutate(currentLead)}
                 onInterested={() => setInterestedLead(currentLead)}
+                onDiary={() => setDiaryLead(currentLead)}
               />
             </div>
           ) : (
@@ -667,6 +672,17 @@ function MyLeads() {
           qc.invalidateQueries({ queryKey: ["my-leads"] });
         }}
       />
+
+      {/* Move / Edit Diary Dialog */}
+      <DiaryDialog
+        lead={diaryLead}
+        open={Boolean(diaryLead)}
+        onOpenChange={(o) => !o && setDiaryLead(null)}
+        onSuccess={() => {
+          refetch();
+          qc.invalidateQueries({ queryKey: ["my-leads"] });
+        }}
+      />
     </>
   );
 }
@@ -679,6 +695,7 @@ function LeadCard({
   onUpdate,
   onOutOfService,
   onInterested,
+  onDiary,
 }: {
   lead: Lead;
   followUp?: { date: string; time: string | null };
@@ -687,12 +704,16 @@ function LeadCard({
   onUpdate: () => void;
   onOutOfService: () => void;
   onInterested: () => void;
+  onDiary: () => void;
 }) {
   const initials = lead.customer_name
     .split(" ")
     .map((p) => p[0])
     .slice(0, 2)
     .join("");
+
+  const inDiary = isDiaryLead(lead.notes);
+  const diaryMeta = parseDiaryData(lead.notes);
 
   return (
     <div className="relative overflow-hidden rounded-2xl border bg-card p-5 shadow-lg card-elevated border-brand/30">
@@ -707,6 +728,12 @@ function LeadCard({
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-lg font-extrabold text-foreground">{lead.customer_name}</p>
               <LeadStatusBadge status={lead.status} />
+              {inDiary && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30 px-2.5 py-0.5 text-xs font-bold shadow-xs">
+                  <BookOpen className="h-3 w-3" />
+                  <span>DIARY · {diaryMeta?.priority || "HIGH"}</span>
+                </span>
+              )}
             </div>
             <p className="mt-0.5 font-mono text-sm font-semibold text-muted-foreground">{lead.mobile}</p>
             {lead.email && <p className="text-xs text-muted-foreground">{lead.email}</p>}
@@ -721,6 +748,23 @@ function LeadCard({
             className="h-9 px-3.5 font-bold gradient-brand text-white shadow-sm"
           >
             <Star className="mr-1.5 h-4 w-4 fill-white" /> Interested
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isBusy}
+            onClick={onDiary}
+            className={cn(
+              "h-9 px-3 font-bold transition-all shadow-xs gap-1.5",
+              inDiary
+                ? "bg-amber-500/15 border-amber-500/40 text-amber-500 hover:bg-amber-500/25"
+                : "border-amber-500/30 text-amber-500 hover:bg-amber-500/10"
+            )}
+            title="Move to Important Diary"
+          >
+            <BookOpen className="h-4 w-4" />
+            <span>{inDiary ? "📔 In Diary" : "📔 Move to Diary"}</span>
           </Button>
 
           <Button

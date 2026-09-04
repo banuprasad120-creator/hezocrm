@@ -18,6 +18,7 @@ import { Route as AppCallScreenRouteImport } from './routes/_app.call-screen'
 import { Route as AppCompaniesRouteImport } from './routes/_app.companies'
 import { Route as AppDailyLeadsRouteImport } from './routes/_app.daily-leads'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppDiaryRouteImport } from './routes/_app.diary'
 import { Route as AppEmployeesRouteImport } from './routes/_app.employees'
 import { Route as AppFoldersRouteImport } from './routes/_app.folders'
 import { Route as AppFollowUpsRouteImport } from './routes/_app.follow-ups'
@@ -74,6 +75,11 @@ const AppDailyLeadsRoute = AppDailyLeadsRouteImport.update({
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDiaryRoute = AppDiaryRouteImport.update({
+  id: '/diary',
+  path: '/diary',
   getParentRoute: () => AppRoute,
 } as any)
 const AppEmployeesRoute = AppEmployeesRouteImport.update({
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/companies': typeof AppCompaniesRoute
   '/daily-leads': typeof AppDailyLeadsRoute
   '/dashboard': typeof AppDashboardRoute
+  '/diary': typeof AppDiaryRoute
   '/employees': typeof AppEmployeesRoute
   '/folders': typeof AppFoldersRoute
   '/follow-ups': typeof AppFollowUpsRoute
@@ -174,6 +181,7 @@ export interface FileRoutesByTo {
   '/companies': typeof AppCompaniesRoute
   '/daily-leads': typeof AppDailyLeadsRoute
   '/dashboard': typeof AppDashboardRoute
+  '/diary': typeof AppDiaryRoute
   '/employees': typeof AppEmployeesRoute
   '/folders': typeof AppFoldersRoute
   '/follow-ups': typeof AppFollowUpsRoute
@@ -199,6 +207,7 @@ export interface FileRoutesById {
   '/_app/companies': typeof AppCompaniesRoute
   '/_app/daily-leads': typeof AppDailyLeadsRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/diary': typeof AppDiaryRoute
   '/_app/employees': typeof AppEmployeesRoute
   '/_app/folders': typeof AppFoldersRoute
   '/_app/follow-ups': typeof AppFollowUpsRoute
@@ -224,6 +233,7 @@ export interface FileRouteTypes {
     | '/companies'
     | '/daily-leads'
     | '/dashboard'
+    | '/diary'
     | '/employees'
     | '/folders'
     | '/follow-ups'
@@ -247,6 +257,7 @@ export interface FileRouteTypes {
     | '/companies'
     | '/daily-leads'
     | '/dashboard'
+    | '/diary'
     | '/employees'
     | '/folders'
     | '/follow-ups'
@@ -271,6 +282,7 @@ export interface FileRouteTypes {
     | '/_app/companies'
     | '/_app/daily-leads'
     | '/_app/dashboard'
+    | '/_app/diary'
     | '/_app/employees'
     | '/_app/folders'
     | '/_app/follow-ups'
@@ -354,6 +366,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/diary': {
+      id: '/_app/diary'
+      path: '/diary'
+      fullPath: '/diary'
+      preLoaderRoute: typeof AppDiaryRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/employees': {
@@ -458,6 +477,7 @@ interface AppRouteChildren {
   AppCompaniesRoute: typeof AppCompaniesRoute
   AppDailyLeadsRoute: typeof AppDailyLeadsRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppDiaryRoute: typeof AppDiaryRoute
   AppEmployeesRoute: typeof AppEmployeesRoute
   AppFoldersRoute: typeof AppFoldersRoute
   AppFollowUpsRoute: typeof AppFollowUpsRoute
@@ -481,6 +501,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCompaniesRoute: AppCompaniesRoute,
   AppDailyLeadsRoute: AppDailyLeadsRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppDiaryRoute: AppDiaryRoute,
   AppEmployeesRoute: AppEmployeesRoute,
   AppFoldersRoute: AppFoldersRoute,
   AppFollowUpsRoute: AppFollowUpsRoute,
