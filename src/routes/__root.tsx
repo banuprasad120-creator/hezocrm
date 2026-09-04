@@ -63,6 +63,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { name: "theme-color", content: "#0f172a" },
+      { name: "mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
+      { name: "application-name", content: "Hezo CRM" },
       { title: "Hezo CRM — AI-powered Call Center CRM" },
       { name: "description", content: "Hezo CRM is a premium AI-powered call center CRM built for telecalling companies, BPOs, DSAs, and sales teams." },
       { name: "author", content: "Hezo" },
@@ -72,6 +76,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:card", content: "summary_large_image" },
     ],
     links: [
+      { rel: "manifest", href: "/manifest.json" },
+      { rel: "apple-touch-icon", href: "/icon-512.svg" },
       { rel: "stylesheet", href: appCss },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -101,6 +107,15 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch((err) => {
+        console.warn("[SW] Registration error:", err);
+      });
+    }
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>

@@ -1,0 +1,49 @@
+{
+  "name": "Hezo CRM — Call Center AI",
+  "short_name": "Hezo CRM",
+  "description": "Enterprise AI-powered Call Center CRM for telecalling, loans, and sales teams.",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#0b0f19",
+  "theme_color": "#6366f1",
+  "orientation": "portrait",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-512.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ],
+  "categories": ["business", "productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "My Leads",
+      "url": "/my-leads",
+      "description": "View calling queue"
+    },
+    {
+      "name": "Daily Diary",
+      "url": "/diary",
+      "description": "View important starred leads"
+    },
+    {
+      "name": "Interested Leads",
+      "url": "/interested",
+      "description": "View converted candidates"
+    }
+  ]
+}
