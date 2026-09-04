@@ -18,6 +18,7 @@ import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_app/leads")({
   validateSearch: (search: Record<string, unknown>): { agent?: string; status?: string } => ({
