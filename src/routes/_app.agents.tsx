@@ -1,24 +1,25 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit2, Loader2, Phone, Plus, Trash2, UserPlus, Zap } from "lucide-react";
+import { Edit2, Folder, Loader2, Phone, Plus, Sparkles, Trash2, UserPlus, Users, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { createAgent, updateAgentPhone } from "@/lib/crm.functions";
 import { StatusBadge } from "@/components/common/StatusBadge";
-import { allocateNextLeadBatch } from "@/lib/lead-batch";
+import { allocateNextLeadBatch, getUnassignedLeadsCount } from "@/lib/lead-batch";
 
 export const Route = createFileRoute("/_app/agents")({
   head: () => ({
     meta: [
       { title: "Agents — Hezo CRM" },
-      { name: "description", content: "Create calling agent accounts, manage phone numbers, and monitor assigned lead workloads." },
+      { name: "description", content: "Create calling agent accounts, manage phone numbers, and manually allocate clients." },
       { property: "og:title", content: "Agents — Hezo CRM" },
       { property: "og:description", content: "Manage the calling agents in your company." },
     ],
@@ -65,12 +66,81 @@ function AgentsPage() {
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
 
+  // Manual Client Allocation Modal State
+  const [allocateModal, setAllocateModal] = useState<{
+    open: boolean;
+    agent: { id: string; name: string; email: string } | null;
+  }>({
+    open: false,
+    agent: null,
+  });
+  const [allocateCount, setAllocateCount] = useState<number>(100);
+  const [allocateFolderId, setAllocateFolderId] = useState<string>("all");
+  const [allocateBusy, setAllocateBusy] = useState(false);
+
+  /* ── Total Unassigned Leads in Company ── */
+  const { data: unassignedCount = 0 } = useQuery({
+    queryKey: ["unassigned-leads-count", companyId, allocateFolderId],
+    enabled: Boolean(companyId),
+    queryFn: () => getUnassignedLeadsCount(companyId!, allocateFolderId === "all" ? null : allocateFolderId),
+  });
+
+  /* ── Folders for optional targeting ── */
+  const { data: folders = [] } = useQuery({
+    queryKey: ["lead-folders", companyId],
+    enabled: Boolean(companyId),
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("folders")
+        .select("id, name, date")
+        .eq("company_id", companyId!)
+        .order("date", { ascending: false });
+      return data ?? [];
+    },
+  });
+
   const openPhoneModal = (agent: { id: string; full_name?: string | null; email: string; phone?: string | null }) => {
     setPhoneModal({
       open: true,
       agent: { id: agent.id, name: agent.full_name || agent.email, email: agent.email, phone: agent.phone || "" },
     });
     setPhoneInput(agent.phone || "");
+  };
+
+  const openAllocateModal = (agent: { id: string; full_name?: string | null; email: string }) => {
+    setAllocateModal({
+      open: true,
+      agent: { id: agent.id, name: agent.full_name || agent.email, email: agent.email },
+    });
+    setAllocateCount(100);
+    setAllocateFolderId("all");
+  };
+
+  const executeAllocation = async () => {
+    if (!companyId || !allocateModal.agent) return;
+    setAllocateBusy(true);
+    try {
+      const res = await allocateNextLeadBatch(
+        companyId,
+        allocateModal.agent.id,
+        allocateCount,
+        "ADMIN_MANUAL_ALLOCATION",
+        true, // allow manual allocation
+        allocateFolderId === "all" ? null : allocateFolderId
+      );
+      if (res.success && res.assigned_count && res.assigned_count > 0) {
+        toast.success(`🎉 Allocated ${res.assigned_count} clients to ${allocateModal.agent.name}!`);
+        qc.invalidateQueries({ queryKey: ["agent-lead-counts"] });
+        qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+        setAllocateModal({ open: false, agent: null });
+      } else {
+        toast.info(res.message || "No eligible unassigned clients found to allocate");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to allocate clients");
+    } finally {
+      setAllocateBusy(false);
+    }
   };
 
   const savePhone = async () => {
@@ -118,21 +188,6 @@ function AgentsPage() {
     qc.invalidateQueries({ queryKey: ["agents"] });
   };
 
-  const allocateBatchForAgent = async (agentId: string, agentName: string) => {
-    if (!companyId) return;
-    try {
-      const res = await allocateNextLeadBatch(companyId, agentId, 100, "INITIAL_ALLOCATION");
-      if (res.success && res.assigned_count && res.assigned_count > 0) {
-        toast.success(`Allocated ${res.assigned_count} leads to ${agentName}`);
-        qc.invalidateQueries();
-      } else {
-        toast.info(res.message || "No unassigned leads available to allocate");
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to allocate batch");
-    }
-  };
-
   const deleteAgent = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to delete agent "${name}"? This action cannot be undone.`)) return;
     // Unassign their leads
@@ -151,31 +206,39 @@ function AgentsPage() {
     <>
       <PageHeader
         title="Agents"
-        description="Calling agents in your company. Manage phone numbers, status, and assigned lead workloads."
+        description="Calling agents in your company. Manage phone numbers, allocate client workloads, and track status."
         actions={
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm" className="gradient-brand text-white"><UserPlus className="mr-1.5 h-4 w-4" /> New Agent</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add New Calling Agent</DialogTitle>
-                <DialogDescription>Create a login for a team member who will make calls in Hezo CRM.</DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-3 py-2">
-                <div><Label>Full name</Label><Input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} placeholder="Priya Sharma" /></div>
-                <div><Label>Email (Login ID)</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="priya@company.com" /></div>
-                <div><Label>Calling Number / Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98765 43210" /></div>
-                <div><Label>Temporary Password</Label><Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 6 characters" /></div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                <Button className="gradient-brand text-white" disabled={busy || !form.email || !form.password} onClick={submit}>
-                  {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null} Create Agent
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1.5 rounded-xl border border-brand/20 bg-brand/5 px-3 py-1.5 text-xs text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-brand" />
+              <span>Available Unassigned:</span>
+              <strong className="text-foreground font-mono font-bold">{unassignedCount}</strong>
+            </div>
+
+            <Dialog open={open} onOpenChange={setOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" className="gradient-brand text-white"><UserPlus className="mr-1.5 h-4 w-4" /> New Agent</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add New Calling Agent</DialogTitle>
+                  <DialogDescription>Create a login for a team member who will make calls in Hezo CRM.</DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-3 py-2">
+                  <div><Label>Full name</Label><Input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} placeholder="Priya Sharma" /></div>
+                  <div><Label>Email (Login ID)</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="priya@company.com" /></div>
+                  <div><Label>Calling Number / Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98765 43210" /></div>
+                  <div><Label>Temporary Password</Label><Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 6 characters" /></div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+                  <Button className="gradient-brand text-white" disabled={busy || !form.email || !form.password} onClick={submit}>
+                    {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null} Create Agent
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
         }
       />
 
@@ -221,17 +284,17 @@ function AgentsPage() {
               )}
             </div>
 
-            <div className="mt-3 flex items-center justify-between border-t pt-3 text-xs">
-              <span className="text-muted-foreground">Assigned leads: <strong className="text-foreground">{counts[a.id] ?? 0}</strong></span>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs">
+              <span className="text-muted-foreground">Assigned: <strong className="text-foreground">{counts[a.id] ?? 0} leads</strong></span>
               <div className="flex items-center gap-1.5">
-                {(counts[a.id] ?? 0) === 0 && a.is_active && (
+                {a.is_active && (
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 text-xs font-bold border-brand/40 text-brand"
-                    onClick={() => allocateBatchForAgent(a.id, a.full_name || a.email)}
+                    className="h-8 text-xs font-bold border-brand/40 text-brand hover:bg-brand/10"
+                    onClick={() => openAllocateModal(a)}
                   >
-                    <Zap className="mr-1 h-3 w-3 fill-brand" /> +100
+                    <Zap className="mr-1 h-3 w-3 fill-brand" /> Assign Clients
                   </Button>
                 )}
                 <Button size="sm" variant="outline" className="h-8 text-xs font-semibold" onClick={() => toggleActive(a.id, !a.is_active)}>
@@ -255,7 +318,7 @@ function AgentsPage() {
               <th className="px-4 py-3">Agent</th>
               <th className="px-4 py-3">Email</th>
               <th className="px-4 py-3">Phone / Number</th>
-              <th className="px-4 py-3">Assigned leads</th>
+              <th className="px-4 py-3">Assigned Leads</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
@@ -291,10 +354,21 @@ function AgentsPage() {
                     </Button>
                   )}
                 </td>
-                <td className="px-4 py-3">{counts[a.id] ?? 0}</td>
+                <td className="px-4 py-3 font-mono font-semibold">{counts[a.id] ?? 0}</td>
                 <td className="px-4 py-3"><StatusBadge label={a.is_active ? "Active" : "Suspended"} /></td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-2">
+                    {a.is_active && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs font-bold border-brand/40 text-brand hover:bg-brand/10"
+                        onClick={() => openAllocateModal(a)}
+                        title="Manually assign custom number of clients"
+                      >
+                        <Zap className="mr-1 h-3.5 w-3.5 fill-brand" /> Assign Clients
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
@@ -304,16 +378,6 @@ function AgentsPage() {
                     >
                       <Phone className="mr-1 h-3 w-3 text-brand" /> {a.phone ? "Edit No." : "Add No."}
                     </Button>
-                    {(counts[a.id] ?? 0) === 0 && a.is_active && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-8 text-xs font-bold border-brand/40 text-brand hover:bg-brand/10"
-                        onClick={() => allocateBatchForAgent(a.id, a.full_name || a.email)}
-                      >
-                        <Zap className="mr-1 h-3.5 w-3.5 fill-brand" /> Allocate Batch
-                      </Button>
-                    )}
                     <Button size="sm" variant="outline" className="h-8 text-xs font-medium" onClick={() => toggleActive(a.id, !a.is_active)}>
                       {a.is_active ? "Deactivate" : "Activate"}
                     </Button>
@@ -334,6 +398,114 @@ function AgentsPage() {
         </table>
         {agents.length === 0 && <p className="p-10 text-center text-sm text-muted-foreground">No agents yet. Create your first agent.</p>}
       </div>
+
+      {/* Manual Client Allocation Dialog */}
+      <Dialog open={allocateModal.open} onOpenChange={(v) => !allocateBusy && setAllocateModal((p) => ({ ...p, open: v }))}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand/10 text-brand">
+                <Users className="h-4 w-4" />
+              </div>
+              Assign Clients to Agent
+            </DialogTitle>
+            <DialogDescription>
+              Allocate a specific number of unassigned clients to <strong className="text-foreground">{allocateModal.agent?.name}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-3">
+            <div className="rounded-xl border border-brand/20 bg-brand/5 p-3 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground font-medium">Available Unassigned Leads:</span>
+              <span className="font-bold text-foreground font-mono bg-background px-2.5 py-1 rounded-md border shadow-sm">
+                {unassignedCount} clients ready
+              </span>
+            </div>
+
+            {folders.length > 0 && (
+              <div>
+                <Label className="text-xs font-semibold text-foreground">Select Source Folder (Optional)</Label>
+                <div className="mt-1.5">
+                  <Select value={allocateFolderId} onValueChange={setAllocateFolderId}>
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="All Available Folders" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Folders (Default)</SelectItem>
+                      {folders.map((f) => (
+                        <SelectItem key={f.id} value={f.id}>
+                          {f.name} ({f.date})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label className="text-xs font-semibold text-foreground">Quick Quantity Presets</Label>
+              <div className="grid grid-cols-5 gap-1.5 mt-2">
+                {[25, 50, 100, 200, 500].map((preset) => (
+                  <Button
+                    key={preset}
+                    type="button"
+                    variant={allocateCount === preset ? "default" : "outline"}
+                    size="sm"
+                    className={`h-8 text-xs font-bold ${
+                      allocateCount === preset ? "gradient-brand text-white" : "border-border hover:border-brand/40"
+                    }`}
+                    onClick={() => setAllocateCount(preset)}
+                  >
+                    {preset}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="manual-allocate-count" className="text-xs font-semibold text-foreground">
+                Or Enter Custom Number of Clients
+              </Label>
+              <div className="relative mt-1.5">
+                <Input
+                  id="manual-allocate-count"
+                  type="number"
+                  min={1}
+                  max={5000}
+                  className="font-mono text-sm font-bold pl-3"
+                  value={allocateCount}
+                  onChange={(e) => setAllocateCount(Math.max(1, parseInt(e.target.value) || 1))}
+                  placeholder="e.g. 75"
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Current workload: {counts[allocateModal.agent?.id || ""] ?? 0} leads assigned.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-between sm:justify-between gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={allocateBusy}
+              onClick={() => setAllocateModal({ open: false, agent: null })}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="gradient-brand text-white font-bold"
+              size="sm"
+              disabled={allocateBusy || allocateCount <= 0 || unassignedCount === 0}
+              onClick={executeAllocation}
+            >
+              {allocateBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Zap className="mr-1.5 h-4 w-4 fill-white" />}
+              Assign {allocateCount} Clients
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add / Edit Phone Number Dialog */}
       <Dialog open={phoneModal.open} onOpenChange={(v) => !phoneBusy && setPhoneModal((p) => ({ ...p, open: v }))}>

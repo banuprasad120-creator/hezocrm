@@ -119,16 +119,44 @@ export interface AllocationResult {
 }
 
 /**
- * Request next batch of leads for an agent atomically via Supabase RPC.
- * Fallback to direct client transaction if RPC is unavailable.
+ * Get count of unassigned available leads in company.
+ */
+export async function getUnassignedLeadsCount(companyId: string, folderId?: string | null): Promise<number> {
+  try {
+    let q = supabase
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .eq("company_id", companyId)
+      .is("assigned_to", null)
+      .eq("status", "New");
+    if (folderId) {
+      q = q.eq("folder_id", folderId);
+    }
+    const { count, error } = await q;
+    if (error) return 0;
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Request next batch of leads for an agent atomically via Supabase RPC or client transaction.
  */
 export async function allocateNextLeadBatch(
   companyId: string,
   employeeId: string,
   batchSize = 100,
-  source = "AUTO_BATCH_REFILL"
+  source = "AUTO_BATCH_REFILL",
+  allowWhenPending = false,
+  folderId?: string | null
 ): Promise<AllocationResult> {
   try {
+    // If manual or custom batch, execute client-side direct allocation
+    if (allowWhenPending || source !== "AUTO_BATCH_REFILL") {
+      return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderId);
+    }
+
     // 1. Try atomic PostgreSQL RPC function
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { data: rpcRes, error: rpcErr } = await (supabase.rpc as any)("allocate_lead_batch", {
@@ -143,7 +171,7 @@ export async function allocateNextLeadBatch(
     }
 
     // 2. Client-side fallback if RPC is ever unreachable
-    return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source);
+    return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderId);
   } catch (e) {
     return {
       success: false,
@@ -160,23 +188,29 @@ async function clientSideFallbackAllocate(
   companyId: string,
   employeeId: string,
   batchSize: number,
-  source: string
+  source: string,
+  allowWhenPending = false,
+  folderId?: string | null
 ): Promise<AllocationResult> {
-  // Check if agent already has pending leads
-  const { count: pendingCount } = await supabase
-    .from("leads")
-    .select("id", { count: "exact", head: true })
-    .eq("company_id", companyId)
-    .eq("assigned_to", employeeId)
-    .in("status", ["New", "Assigned"]);
+  const isManual = allowWhenPending || source !== "AUTO_BATCH_REFILL";
 
-  if ((pendingCount ?? 0) > 0) {
-    return {
-      success: false,
-      message: `Agent already has ${pendingCount} pending leads in current batch`,
-      assigned_count: 0,
-      remaining_pending: pendingCount ?? 0,
-    };
+  // Check if agent already has pending leads (only block automatic refills)
+  if (!isManual) {
+    const { count: pendingCount } = await supabase
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .eq("company_id", companyId)
+      .eq("assigned_to", employeeId)
+      .in("status", ["New", "Assigned"]);
+
+    if ((pendingCount ?? 0) > 0) {
+      return {
+        success: false,
+        message: `Agent already has ${pendingCount} pending leads in current batch`,
+        assigned_count: 0,
+        remaining_pending: pendingCount ?? 0,
+      };
+    }
   }
 
   // Fetch company history of assigned/called numbers to strictly exclude
@@ -193,15 +227,21 @@ async function clientSideFallbackAllocate(
   }
 
   // Fetch unassigned leads
-  const { data: unassigned, error } = await supabase
+  let query = supabase
     .from("leads")
     .select("id, mobile")
     .eq("company_id", companyId)
     .is("assigned_to", null)
-    .eq("status", "New")
+    .eq("status", "New");
+
+  if (folderId) {
+    query = query.eq("folder_id", folderId);
+  }
+
+  const { data: unassigned, error } = await query
     .order("folder_date", { ascending: false })
     .order("created_at", { ascending: true })
-    .limit(batchSize * 3);
+    .limit(Math.max(batchSize * 3, 300));
 
   if (error || !unassigned || unassigned.length === 0) {
     return {

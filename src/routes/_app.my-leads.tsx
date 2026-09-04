@@ -16,8 +16,11 @@ import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { parseInterestedData } from "@/lib/interested-lead";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  getCompanyBatchSettings, getActiveAgentBatch, allocateNextLeadBatch, type LeadBatch,
+  getCompanyBatchSettings, getActiveAgentBatch, allocateNextLeadBatch, getUnassignedLeadsCount, type LeadBatch,
 } from "@/lib/lead-batch";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
@@ -45,6 +48,17 @@ function MyLeads() {
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
   const [autoRefill, setAutoRefill] = useState(true);
   const [claiming, setClaiming] = useState(false);
+
+  // Manual client fetch modal state
+  const [fetchModalOpen, setFetchModalOpen] = useState(false);
+  const [manualCount, setManualCount] = useState<number>(100);
+
+  /* ── Fetch Available Unassigned Leads in Company ── */
+  const { data: unassignedCount = 0 } = useQuery({
+    queryKey: ["unassigned-leads-count", companyId],
+    enabled: Boolean(companyId),
+    queryFn: () => getUnassignedLeadsCount(companyId!),
+  });
 
   /* ── Fetch Company Batch Settings (default 100) ── */
   const { data: batchSettings } = useQuery({
@@ -189,34 +203,38 @@ function MyLeads() {
   });
 
   /* ── Automated / On-demand Batch Allocation & Refill ── */
-  const claimNextBatch = async (isAutomatic = false) => {
+  const claimNextBatch = async (customCount?: number, isAutomatic = false) => {
     if (!companyId || !userId || claiming) return;
+    const requestedSize = customCount && customCount > 0 ? customCount : batchSize;
     setClaiming(true);
     try {
       const res = await allocateNextLeadBatch(
         companyId,
         userId,
-        batchSize,
-        isAutomatic ? "AUTO_BATCH_REFILL" : "MANUAL_BATCH_REQUEST"
+        requestedSize,
+        isAutomatic ? "AUTO_BATCH_REFILL" : "MANUAL_BATCH_REQUEST",
+        !isAutomatic // Allow manual fetch even if pending leads exist
       );
 
       if (res.success && res.assigned_count && res.assigned_count > 0) {
-        if (res.assigned_count < batchSize) {
-          toast.info(`⚡ ${res.assigned_count} new leads assigned. Only ${res.assigned_count} eligible unassigned leads remain.`);
+        if (res.assigned_count < requestedSize) {
+          toast.info(`⚡ ${res.assigned_count} new clients assigned. (${res.assigned_count} total available leads were allocated).`);
         } else {
-          toast.success(`🎉 Previous batch completed! ${res.assigned_count} new leads assigned in Batch #${res.batch_number || 1}!`);
+          toast.success(`🎉 ${res.assigned_count} clients successfully added to your calling queue!`);
         }
         await qc.invalidateQueries({ queryKey: ["my-leads"] });
         await qc.invalidateQueries({ queryKey: ["active-batch"] });
         await qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+        await qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+        setFetchModalOpen(false);
       } else if (res.assigned_count === 0) {
         if (!isAutomatic) {
-          toast.info("No unassigned leads available in company folders right now.");
+          toast.info("No unassigned clients available in company folders right now.");
         }
       }
     } catch (err) {
       console.error("Batch allocation error:", err);
-      if (!isAutomatic) toast.error(err instanceof Error ? err.message : "Failed to claim batch");
+      if (!isAutomatic) toast.error(err instanceof Error ? err.message : "Failed to claim clients");
     } finally {
       setClaiming(false);
     }
@@ -225,7 +243,7 @@ function MyLeads() {
   /* ── Automated trigger: When an agent finishes all pending leads in their batch, auto-assign next batch! ── */
   useEffect(() => {
     if (!isLoading && autoRefill && isAutomationEnabled && pendingLeads.length === 0 && !claiming) {
-      claimNextBatch(true);
+      claimNextBatch(undefined, true);
     }
   }, [isLoading, pendingLeads.length, autoRefill, isAutomationEnabled]);
 
@@ -242,11 +260,14 @@ function MyLeads() {
               variant="outline"
               size="sm"
               disabled={claiming}
-              onClick={() => claimNextBatch(false)}
-              className="h-9 font-bold border-brand/40 text-brand hover:bg-brand/10"
+              onClick={() => {
+                setManualCount(batchSize || 100);
+                setFetchModalOpen(true);
+              }}
+              className="h-9 font-bold border-brand/40 text-brand hover:bg-brand/10 shadow-sm"
             >
-              {claiming ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1 h-3.5 w-3.5 fill-brand" />}
-              Fetch +{batchSize} Leads
+              {claiming ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1.5 h-3.5 w-3.5 fill-brand" />}
+              Fetch / Add Clients
             </Button>
             <Button variant="outline" size="sm" onClick={() => refetch()} className="h-9">
               <RefreshCw className="mr-1 h-4 w-4" /> Refresh
@@ -519,6 +540,88 @@ function MyLeads() {
         open={Boolean(viewLead)}
         onOpenChange={(o) => !o && setViewLead(null)}
       />
+
+      {/* Manual Fetch / Add Clients Dialog */}
+      <Dialog open={fetchModalOpen} onOpenChange={setFetchModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand/10 text-brand">
+                <Zap className="h-4 w-4 fill-brand" />
+              </div>
+              Add Clients to Queue
+            </DialogTitle>
+            <DialogDescription>
+              Select or enter the exact number of unassigned clients you want to add into your calling queue.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-3">
+            <div className="rounded-xl border border-brand/20 bg-brand/5 p-3 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground font-medium">Available Unassigned Leads:</span>
+              <span className="font-bold text-foreground font-mono bg-background px-2.5 py-1 rounded-md border shadow-sm">
+                {unassignedCount} clients ready
+              </span>
+            </div>
+
+            <div>
+              <Label className="text-xs font-semibold text-foreground">Quick Presets</Label>
+              <div className="grid grid-cols-5 gap-1.5 mt-2">
+                {[10, 25, 50, 100, 200].map((preset) => (
+                  <Button
+                    key={preset}
+                    type="button"
+                    variant={manualCount === preset ? "default" : "outline"}
+                    size="sm"
+                    className={`h-8 text-xs font-bold ${
+                      manualCount === preset ? "gradient-brand text-white" : "border-border hover:border-brand/40"
+                    }`}
+                    onClick={() => setManualCount(preset)}
+                  >
+                    +{preset}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="manual-clients-count" className="text-xs font-semibold text-foreground">
+                Or Enter Custom Number of Clients
+              </Label>
+              <div className="relative mt-1.5">
+                <Input
+                  id="manual-clients-count"
+                  type="number"
+                  min={1}
+                  max={5000}
+                  className="font-mono text-sm font-bold pl-3"
+                  value={manualCount}
+                  onChange={(e) => setManualCount(Math.max(1, parseInt(e.target.value) || 1))}
+                  placeholder="e.g. 50"
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Up to {unassignedCount > 0 ? unassignedCount : "0"} clients can be fetched directly into your queue.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-between sm:justify-between gap-2">
+            <Button variant="outline" size="sm" onClick={() => setFetchModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="gradient-brand text-white font-bold"
+              size="sm"
+              disabled={claiming || manualCount <= 0 || unassignedCount === 0}
+              onClick={() => claimNextBatch(manualCount, false)}
+            >
+              {claiming ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Zap className="mr-1.5 h-4 w-4 fill-white" />}
+              Add {manualCount} Clients
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
