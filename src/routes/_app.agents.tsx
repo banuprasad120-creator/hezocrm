@@ -75,27 +75,31 @@ function AgentsPage() {
     agent: null,
   });
   const [allocateCount, setAllocateCount] = useState<number>(100);
-  const [allocateFolderId, setAllocateFolderId] = useState<string>("all");
+  const [allocateFolderDate, setAllocateFolderDate] = useState<string>("all");
   const [allocateBusy, setAllocateBusy] = useState(false);
 
   /* ── Total Unassigned Leads in Company ── */
   const { data: unassignedCount = 0 } = useQuery({
-    queryKey: ["unassigned-leads-count", companyId, allocateFolderId],
+    queryKey: ["unassigned-leads-count", companyId, allocateFolderDate],
     enabled: Boolean(companyId),
-    queryFn: () => getUnassignedLeadsCount(companyId!, allocateFolderId === "all" ? null : allocateFolderId),
+    queryFn: () => getUnassignedLeadsCount(companyId!, allocateFolderDate === "all" ? null : allocateFolderDate),
   });
 
-  /* ── Folders for optional targeting ── */
+  /* ── Folder Dates for optional targeting ── */
   const { data: folders = [] } = useQuery({
-    queryKey: ["lead-folders", companyId],
+    queryKey: ["lead-folder-dates", companyId],
     enabled: Boolean(companyId),
     queryFn: async () => {
-      const { data } = await supabase
-        .from("folders")
-        .select("id, name, date")
+      const { data, error } = await supabase
+        .from("lead_folder_counts")
+        .select("folder_date, lead_count")
         .eq("company_id", companyId!)
-        .order("date", { ascending: false });
-      return data ?? [];
+        .order("folder_date", { ascending: false });
+      if (error) return [];
+      return (data ?? []).map((r) => ({
+        date: String(r.folder_date),
+        count: Number(r.lead_count ?? 0),
+      }));
     },
   });
 
@@ -113,7 +117,7 @@ function AgentsPage() {
       agent: { id: agent.id, name: agent.full_name || agent.email, email: agent.email },
     });
     setAllocateCount(100);
-    setAllocateFolderId("all");
+    setAllocateFolderDate("all");
   };
 
   const executeAllocation = async () => {
@@ -126,7 +130,7 @@ function AgentsPage() {
         allocateCount,
         "ADMIN_MANUAL_ALLOCATION",
         true, // allow manual allocation
-        allocateFolderId === "all" ? null : allocateFolderId
+        allocateFolderDate === "all" ? null : allocateFolderDate
       );
       if (res.success && res.assigned_count && res.assigned_count > 0) {
         toast.success(`🎉 Allocated ${res.assigned_count} clients to ${allocateModal.agent.name}!`);
@@ -426,15 +430,15 @@ function AgentsPage() {
               <div>
                 <Label className="text-xs font-semibold text-foreground">Select Source Folder (Optional)</Label>
                 <div className="mt-1.5">
-                  <Select value={allocateFolderId} onValueChange={setAllocateFolderId}>
+                  <Select value={allocateFolderDate} onValueChange={setAllocateFolderDate}>
                     <SelectTrigger className="text-xs">
                       <SelectValue placeholder="All Available Folders" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Folders (Default)</SelectItem>
                       {folders.map((f) => (
-                        <SelectItem key={f.id} value={f.id}>
-                          {f.name} ({f.date})
+                        <SelectItem key={f.date} value={f.date}>
+                          Folder: {f.date} ({f.count} leads)
                         </SelectItem>
                       ))}
                     </SelectContent>

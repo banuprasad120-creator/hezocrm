@@ -121,7 +121,7 @@ export interface AllocationResult {
 /**
  * Get count of unassigned available leads in company.
  */
-export async function getUnassignedLeadsCount(companyId: string, folderId?: string | null): Promise<number> {
+export async function getUnassignedLeadsCount(companyId: string, folderDate?: string | null): Promise<number> {
   try {
     let q = supabase
       .from("leads")
@@ -129,8 +129,8 @@ export async function getUnassignedLeadsCount(companyId: string, folderId?: stri
       .eq("company_id", companyId)
       .is("assigned_to", null)
       .eq("status", "New");
-    if (folderId) {
-      q = q.eq("folder_id", folderId);
+    if (folderDate && folderDate !== "all") {
+      q = q.eq("folder_date", folderDate);
     }
     const { count, error } = await q;
     if (error) return 0;
@@ -149,12 +149,12 @@ export async function allocateNextLeadBatch(
   batchSize = 100,
   source = "AUTO_BATCH_REFILL",
   allowWhenPending = false,
-  folderId?: string | null
+  folderDate?: string | null
 ): Promise<AllocationResult> {
   try {
     // If manual or custom batch, execute client-side direct allocation
     if (allowWhenPending || source !== "AUTO_BATCH_REFILL") {
-      return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderId);
+      return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderDate);
     }
 
     // 1. Try atomic PostgreSQL RPC function
@@ -171,7 +171,7 @@ export async function allocateNextLeadBatch(
     }
 
     // 2. Client-side fallback if RPC is ever unreachable
-    return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderId);
+    return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderDate);
   } catch (e) {
     return {
       success: false,
@@ -190,7 +190,7 @@ async function clientSideFallbackAllocate(
   batchSize: number,
   source: string,
   allowWhenPending = false,
-  folderId?: string | null
+  folderDate?: string | null
 ): Promise<AllocationResult> {
   const isManual = allowWhenPending || source !== "AUTO_BATCH_REFILL";
 
@@ -234,8 +234,8 @@ async function clientSideFallbackAllocate(
     .is("assigned_to", null)
     .eq("status", "New");
 
-  if (folderId) {
-    query = query.eq("folder_id", folderId);
+  if (folderDate && folderDate !== "all") {
+    query = query.eq("folder_date", folderDate);
   }
 
   const { data: unassigned, error } = await query
