@@ -14,10 +14,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
+import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { formatDateTime, inr, type Lead } from "@/lib/crm";
 import { parseInterestedData, TOP_BANKS } from "@/lib/interested-lead";
+import { Plus } from "lucide-react";
 
 export const Route = createFileRoute("/_app/interested")({
   head: () => ({
@@ -44,6 +46,7 @@ function InterestedLeadsPage() {
   const [folderDate, setFolderDate] = useState("");
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [editLead, setEditLead] = useState<Lead | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
@@ -195,6 +198,14 @@ function InterestedLeadsPage() {
         description="Customers who accepted service. View captured existing loans, banks and credit cards."
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setCreateOpen(true)}
+              className="h-9 gap-1.5 bg-amber-500 hover:bg-amber-600 text-white font-semibold shadow-xs"
+            >
+              <Flame className="h-4 w-4 fill-white" />
+              <span>+ Add Interested Candidate</span>
+            </Button>
             <Button variant="outline" size="sm" onClick={() => refetch()} className="h-9">
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Refresh
             </Button>
@@ -451,6 +462,15 @@ function InterestedLeadsPage() {
         employeeId={userId || ""}
         open={Boolean(editLead)}
         onOpenChange={(o) => !o && setEditLead(null)}
+        onSuccess={() => refetch()}
+      />
+
+      {/* Create Interested Candidate Dialog */}
+      <CreateInterestedCandidateDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        companyId={companyId}
+        employeeId={userId}
         onSuccess={() => refetch()}
       />
     </>

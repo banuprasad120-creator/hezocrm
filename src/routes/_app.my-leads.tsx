@@ -15,6 +15,7 @@ import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
+import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
 import { parseInterestedData } from "@/lib/interested-lead";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -46,6 +47,7 @@ function MyLeads() {
   const [active, setActive] = useState<Lead | null>(null);
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
+  const [createInterestedOpen, setCreateInterestedOpen] = useState(false);
   const [autoRefill, setAutoRefill] = useState(true);
   const [claiming, setClaiming] = useState(false);
 
@@ -255,7 +257,15 @@ function MyLeads() {
         title="Agent Workspace"
         description={`${stats.pending} pending · ${stats.called} called · ${stats.assigned} total in queue`}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setCreateInterestedOpen(true)}
+              className="h-9 font-bold bg-amber-500/15 hover:bg-amber-500/25 text-amber-500 border border-amber-500/30 shadow-sm"
+            >
+              <Flame className="mr-1.5 h-3.5 w-3.5 fill-amber-500" />
+              + Add Interested Candidate
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -622,6 +632,14 @@ function MyLeads() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Create Interested Candidate Dialog */}
+      <CreateInterestedCandidateDialog
+        open={createInterestedOpen}
+        onOpenChange={setCreateInterestedOpen}
+        companyId={companyId}
+        employeeId={userId}
+      />
     </>
   );
 }
