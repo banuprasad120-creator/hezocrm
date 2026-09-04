@@ -1,14 +1,16 @@
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Building2, CreditCard, Flame, History, PhoneCall } from "lucide-react";
 import { Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
-import { useCrmSession } from "@/hooks/use-crm-session";
+import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { formatDateTime, inr, type Lead } from "@/lib/crm";
 import { parseInterestedData } from "@/lib/interested-lead";
 
@@ -78,6 +80,64 @@ function LeadDetail() {
     },
   });
 
+  const { data: agents = [] } = useAgents(lead?.company_id ?? null, session?.isAdmin ?? false);
+  const qc = useQueryClient();
+
+  const assignedAgent = agents.find((a) => a.id === lead?.assigned_to);
+
+  const reassignLead = async (newAgentId: string) => {
+    if (!lead || !lead.company_id) return;
+    try {
+      const now = new Date().toISOString();
+      const isAssigned = Boolean(newAgentId && newAgentId !== "unassigned");
+      const agentVal = isAssigned ? newAgentId : null;
+
+      const { error } = await supabase
+        .from("leads")
+        .update({
+          assigned_to: agentVal,
+          assigned_at: isAssigned ? now : null,
+          status: isAssigned ? "Assigned" : "New",
+        })
+        .eq("id", lead.id);
+
+      if (error) throw error;
+
+      // Lock matching phones
+      if (lead.mobile) {
+        await supabase
+          .from("leads")
+          .update({
+            assigned_to: agentVal,
+            assigned_at: isAssigned ? now : null,
+            status: isAssigned ? "Assigned" : "New",
+          })
+          .eq("mobile", lead.mobile)
+          .eq("company_id", lead.company_id);
+      }
+
+      if (isAssigned) {
+        await supabase.from("lead_assignments").upsert(
+          {
+            lead_id: lead.id,
+            company_id: lead.company_id,
+            employee_id: newAgentId,
+            assigned_by: session?.userId ?? null,
+          },
+          { onConflict: "lead_id" }
+        );
+      }
+
+      toast.success(isAssigned ? "Lead reassigned!" : "Lead unassigned");
+      qc.invalidateQueries({ queryKey: ["lead", leadId] });
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
+    } catch (err) {
+      toast.error("Failed to reassign lead", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    }
+  };
+
   if (!lead) return <p className="text-sm text-muted-foreground">Loading lead…</p>;
 
   const canUpdate = session?.isAdmin || lead.assigned_to === session?.userId;
@@ -111,6 +171,67 @@ function LeadDetail() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-1">
+          {/* Agent Assignment Info Box */}
+          <div className="rounded-2xl border bg-card p-5 card-elevated space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Assigned Agent</p>
+              {lead.assigned_to ? (
+                <span className="rounded-full bg-brand/10 text-brand px-2.5 py-0.5 text-xs font-semibold">
+                  Assigned
+                </span>
+              ) : (
+                <span className="rounded-full bg-amber-500/10 text-amber-500 px-2.5 py-0.5 text-xs font-semibold">
+                  ⚠️ Unassigned
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand/10 text-brand font-bold text-sm">
+                {(assignedAgent?.full_name || assignedAgent?.email || "?").slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold text-sm text-foreground">
+                  {assignedAgent?.full_name || assignedAgent?.email || (lead.assigned_to ? "Assigned Agent" : "No Agent Assigned")}
+                </p>
+                {assignedAgent?.email && (
+                  <p className="truncate text-xs text-muted-foreground">{assignedAgent.email}</p>
+                )}
+                {lead.assigned_at && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Sent on: {formatDateTime(lead.assigned_at)}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {session?.isAdmin && (
+              <div className="pt-2 border-t">
+                <label className="text-[11px] font-semibold text-muted-foreground mb-1 block">
+                  Change / Reassign Agent:
+                </label>
+                <Select
+                  value={lead.assigned_to || "unassigned"}
+                  onValueChange={(val) => reassignLead(val === "unassigned" ? "" : val)}
+                >
+                  <SelectTrigger className="h-8 text-xs bg-elevated font-medium">
+                    <SelectValue placeholder="Select Agent..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unassigned" className="text-amber-500 font-semibold">
+                      ⚠️ Unassign (Send back to pool)
+                    </SelectItem>
+                    {agents.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        👤 {a.full_name || a.email} {a.phone ? `(${a.phone})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+
           <div className="rounded-2xl border bg-card p-5 card-elevated">
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold">Current status</p>

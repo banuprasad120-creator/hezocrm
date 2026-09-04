@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
+import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LOAN_TYPES, inr, todayISO, type Lead } from "@/lib/crm";
@@ -56,6 +57,7 @@ function DailyLeads() {
   const [assignAgent, setAssignAgent] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [createLeadOpen, setCreateLeadOpen] = useState(false);
   const [unassignedOnly, setUnassignedOnly] = useState(false);
   const [page, setPage] = useState(0);
 
@@ -290,10 +292,17 @@ function DailyLeads() {
         actions={
           <>
             <Input type="date" value={folderDate} onChange={(e) => setFolderDate(e.target.value)} className="h-9 w-[160px]" />
+            <Button
+              size="sm"
+              className="gradient-brand text-white font-bold gap-1 shadow-xs"
+              onClick={() => setCreateLeadOpen(true)}
+            >
+              <UserPlus className="h-4 w-4" />
+              <span>+ Add Lead</span>
+            </Button>
             <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
               <Upload className="mr-1 h-4 w-4" /> Import Leads
             </Button>
-            <NewLeadDialog companyId={companyId} folderDate={folderDate} userId={session?.userId ?? null} />
           </>
         }
       />
@@ -305,6 +314,17 @@ function DailyLeads() {
         userId={session?.userId ?? null}
         folderDate={folderDate}
         onViewImported={() => { setUnassignedOnly(true); setSelected(new Set()); }}
+      />
+
+      <CreateLeadDialog
+        open={createLeadOpen}
+        onOpenChange={setCreateLeadOpen}
+        companyId={companyId}
+        adminUserId={session?.userId ?? null}
+        defaultFolderDate={folderDate}
+        onSuccess={() => {
+          qc.invalidateQueries();
+        }}
       />
 
       <div className="mb-4 flex items-center gap-2 overflow-x-auto no-scrollbar whitespace-nowrap pb-1">

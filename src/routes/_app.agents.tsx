@@ -291,6 +291,15 @@ function AgentsPage() {
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs">
               <span className="text-muted-foreground">Assigned: <strong className="text-foreground">{counts[a.id] ?? 0} leads</strong></span>
               <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs font-semibold"
+                  onClick={() => navigate({ to: "/leads", search: { agent: a.id } })}
+                  title="View leads assigned to this agent"
+                >
+                  <Eye className="mr-1 h-3.5 w-3.5 text-brand" /> View Leads ({counts[a.id] ?? 0})
+                </Button>
                 {a.is_active && (
                   <Button
                     size="sm"
@@ -358,10 +367,29 @@ function AgentsPage() {
                     </Button>
                   )}
                 </td>
-                <td className="px-4 py-3 font-mono font-semibold">{counts[a.id] ?? 0}</td>
+                <td className="px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => navigate({ to: "/leads", search: { agent: a.id } })}
+                    className="flex items-center gap-1 font-mono font-semibold text-brand hover:underline"
+                    title="Click to view leads for this agent"
+                  >
+                    <span>{counts[a.id] ?? 0} leads</span>
+                    <Eye className="h-3.5 w-3.5 opacity-60" />
+                  </button>
+                </td>
                 <td className="px-4 py-3"><StatusBadge label={a.is_active ? "Active" : "Suspended"} /></td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs font-semibold"
+                      onClick={() => navigate({ to: "/leads", search: { agent: a.id } })}
+                      title="View leads assigned to this agent"
+                    >
+                      <Eye className="mr-1 h-3.5 w-3.5 text-brand" /> View Leads
+                    </Button>
                     {a.is_active && (
                       <Button
                         size="sm"

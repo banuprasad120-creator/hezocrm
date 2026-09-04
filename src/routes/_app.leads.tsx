@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download, Inbox, Loader2, MessageCircle, Phone, Search, Upload, Users2, Eye,
-  Clock, Flame, PhoneCall, CheckCircle2, RefreshCw,
+  Clock, Flame, PhoneCall, CheckCircle2, RefreshCw, Plus, UserPlus, UserCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -14,11 +14,16 @@ import { StatCard } from "@/components/common/StatCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
+import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
-import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, inr, todayISO, type Lead } from "@/lib/crm";
+import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
 
 export const Route = createFileRoute("/_app/leads")({
+  validateSearch: (search: Record<string, unknown>): { agent?: string; status?: string } => ({
+    agent: typeof search["agent"] === "string" ? search["agent"] : undefined,
+    status: typeof search["status"] === "string" ? search["status"] : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "All Leads — Hezo CRM" },
@@ -35,20 +40,22 @@ const PAGE_SIZE = 50;
 function LeadsPage() {
   const { data: session, isLoading: sessionLoading } = useCrmSession();
   const navigate = useNavigate();
+  const search = Route.useSearch();
   const qc = useQueryClient();
   const companyId = session?.companyId ?? null;
   const isAdmin = session?.isAdmin ?? false;
 
   const [q, setQ] = useState("");
   const [term, setTerm] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState(search.status ?? "all");
   const [loanType, setLoanType] = useState("all");
-  const [filterAgent, setFilterAgent] = useState("all");
+  const [filterAgent, setFilterAgent] = useState(search.agent ?? "all");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignAgent, setAssignAgent] = useState("");
   const [busy, setBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [createLeadOpen, setCreateLeadOpen] = useState(false);
 
   useEffect(() => {
     if (!sessionLoading && session && !session.isAdmin) navigate({ to: "/my-leads", replace: true });
@@ -283,9 +290,17 @@ function LeadsPage() {
     <>
       <PageHeader
         title="All Leads"
-        description="Every lead in your company — search, filter, assign and export."
+        description="Every lead in your company — search, filter, track agent assignments, and add direct leads."
         actions={
           <>
+            <Button
+              size="sm"
+              className="h-9 gap-1.5 gradient-brand text-white font-bold shadow-xs"
+              onClick={() => setCreateLeadOpen(true)}
+            >
+              <UserPlus className="h-4 w-4" />
+              <span>+ Add New Lead</span>
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -299,13 +314,13 @@ function LeadsPage() {
               <RefreshCw className="mr-1.5 h-4 w-4" /> Refresh
             </Button>
             <Button variant="outline" size="sm" className="h-9" onClick={() => setImportOpen(true)}>
-              <Upload className="mr-1.5 h-4 w-4" /> Import
+              <Upload className="mr-1.5 h-4 w-4" /> Import CSV
             </Button>
             <Button variant="outline" size="sm" className="h-9" disabled={busy} onClick={exportCsv}>
               {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />} Export
             </Button>
-            <Button asChild size="sm" className="h-9 gradient-brand text-white">
-              <Link to="/daily-leads">Add / Assign leads</Link>
+            <Button asChild size="sm" variant="secondary" className="h-9 font-semibold">
+              <Link to="/daily-leads">Folders / Batches</Link>
             </Button>
           </>
         }
@@ -319,6 +334,51 @@ function LeadsPage() {
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border bg-card card-elevated sm:mt-6">
+        {/* Quick Filter Tabs */}
+        <div className="flex items-center gap-1.5 border-b bg-muted/20 px-3 py-2 overflow-x-auto text-xs font-semibold">
+          <button
+            type="button"
+            onClick={() => { setFilterAgent("all"); setStatus("all"); setPage(0); }}
+            className={cn(
+              "px-3 py-1.5 rounded-lg transition-all",
+              filterAgent === "all" && status === "all"
+                ? "bg-brand text-white shadow-xs font-bold"
+                : "text-muted-foreground hover:bg-muted/60"
+            )}
+          >
+            All Leads ({stats?.total ?? 0})
+          </button>
+          <button
+            type="button"
+            onClick={() => { setFilterAgent("unassigned"); setPage(0); }}
+            className={cn(
+              "px-3 py-1.5 rounded-lg transition-all flex items-center gap-1",
+              filterAgent === "unassigned"
+                ? "bg-amber-500 text-white shadow-xs font-bold"
+                : "text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+            )}
+          >
+            <span>⚠️ Unassigned ({Math.max(0, (stats?.total ?? 0) - (stats?.assigned ?? 0))})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (filterAgent === "unassigned") setFilterAgent("all");
+              setStatus("Assigned");
+              setPage(0);
+            }}
+            className={cn(
+              "px-3 py-1.5 rounded-lg transition-all flex items-center gap-1",
+              status === "Assigned"
+                ? "bg-indigo-600 text-white shadow-xs font-bold"
+                : "text-muted-foreground hover:bg-muted/60"
+            )}
+          >
+            <Users2 className="h-3.5 w-3.5" />
+            <span>Assigned ({stats?.assigned ?? 0})</span>
+          </button>
+        </div>
+
         <div className="flex flex-col gap-3 border-b p-3 sm:p-4">
           <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
             <div className="relative flex-1">
@@ -346,11 +406,15 @@ function LeadsPage() {
                 </SelectContent>
               </Select>
               <Select value={filterAgent} onValueChange={(v) => { setFilterAgent(v); setPage(0); }}>
-                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-44 sm:text-sm font-medium"><SelectValue placeholder="Agent" /></SelectTrigger>
+                <SelectTrigger className="h-9 text-xs sm:h-10 sm:w-44 sm:text-sm font-medium"><SelectValue placeholder="Filter Agent" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Agents</SelectItem>
-                  <SelectItem value="unassigned">Unassigned Only</SelectItem>
-                  {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.full_name || a.email}</SelectItem>)}
+                  <SelectItem value="unassigned" className="text-amber-500 font-semibold">⚠️ Unassigned Only</SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      👤 {a.full_name || a.email}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -572,8 +636,21 @@ function LeadsPage() {
         onOpenChange={setImportOpen}
         companyId={companyId}
         userId={session?.userId ?? null}
-        folderDate={todayISO()}
-        onViewImported={() => { setImportOpen(false); qc.invalidateQueries({ queryKey: ["all-leads"] }); }}
+        onViewImported={() => {
+          qc.invalidateQueries({ queryKey: ["all-leads"] });
+          qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+        }}
+      />
+
+      <CreateLeadDialog
+        open={createLeadOpen}
+        onOpenChange={setCreateLeadOpen}
+        companyId={companyId}
+        adminUserId={session?.userId ?? null}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ["all-leads"] });
+          qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+        }}
       />
     </>
   );
