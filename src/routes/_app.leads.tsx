@@ -637,6 +637,7 @@ function LeadsPage() {
         onOpenChange={setImportOpen}
         companyId={companyId}
         userId={session?.userId ?? null}
+        folderDate={todayISO()}
         onViewImported={() => {
           qc.invalidateQueries({ queryKey: ["all-leads"] });
           qc.invalidateQueries({ queryKey: ["all-leads-stats"] });

@@ -35,13 +35,13 @@ type Result = {
 };
 
 export function ImportLeadsWizard({
-  open, onOpenChange, companyId, userId, folderDate, onViewImported,
+  open, onOpenChange, companyId, userId, folderDate = todayISO(), onViewImported,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   companyId: string | null;
   userId: string | null;
-  folderDate: string;
+  folderDate?: string;
   onViewImported: () => void;
 }) {
   const qc = useQueryClient();
