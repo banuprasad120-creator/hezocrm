@@ -38,6 +38,8 @@ interface CreateLeadDialogProps {
   onOpenChange: (open: boolean) => void;
   companyId: string | null;
   adminUserId?: string | null;
+  employeeId?: string | null;
+  isAgentMode?: boolean;
   defaultFolderDate?: string;
   onSuccess?: () => void;
 }
@@ -47,11 +49,15 @@ export function CreateLeadDialog({
   onOpenChange,
   companyId,
   adminUserId,
+  employeeId,
+  isAgentMode = false,
   defaultFolderDate,
   onSuccess,
 }: CreateLeadDialogProps) {
   const qc = useQueryClient();
   const { data: agents = [] } = useAgents(companyId, true);
+
+  const defaultAssignee = isAgentMode && employeeId ? employeeId : "unassigned";
 
   const [saving, setSaving] = useState(false);
   const [customerName, setCustomerName] = useState("");
@@ -63,9 +69,14 @@ export function CreateLeadDialog({
   const [employer, setEmployer] = useState<string>("");
   const [employmentType, setEmploymentType] = useState<string>("Salaried");
   const [source, setSource] = useState<string>("External Lead / Direct");
-  const [assignedTo, setAssignedTo] = useState<string>("unassigned");
+  const [assignedTo, setAssignedTo] = useState<string>(defaultAssignee);
   const [folderDate, setFolderDate] = useState<string>(defaultFolderDate || todayISO());
   const [notes, setNotes] = useState("");
+
+  // Update assignedTo whenever isAgentMode / employeeId changes or modal opens
+  useState(() => {
+    if (isAgentMode && employeeId) setAssignedTo(employeeId);
+  });
 
   // Live duplicate check when mobile is entered (at least 8 digits)
   const cleanMobile = mobile.replace(/\D/g, "");
@@ -93,7 +104,7 @@ export function CreateLeadDialog({
     setEmployer("");
     setEmploymentType("Salaried");
     setSource("External Lead / Direct");
-    setAssignedTo("unassigned");
+    setAssignedTo(isAgentMode && employeeId ? employeeId : "unassigned");
     setFolderDate(defaultFolderDate || todayISO());
     setNotes("");
   };
@@ -369,30 +380,40 @@ export function CreateLeadDialog({
           {/* Section 3: Agent Allocation & Pipeline */}
           <div className="rounded-xl border border-brand/20 bg-brand/5 p-3 sm:p-4 space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-brand flex items-center gap-1.5">
-              <UserCheck className="h-3.5 w-3.5" /> Agent Assignment & Folder
+              <UserCheck className="h-3.5 w-3.5" /> Pipeline & Assignment
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-foreground">
-                  Send / Assign Directly To Agent
-                </Label>
-                <Select value={assignedTo} onValueChange={setAssignedTo}>
-                  <SelectTrigger className="h-9 bg-card font-medium text-xs">
-                    <SelectValue placeholder="Select Agent or Leave Unassigned" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="unassigned" className="text-muted-foreground font-normal">
-                      ⚠️ Unassigned (General Lead Pool)
-                    </SelectItem>
-                    {agents.map((a) => (
-                      <SelectItem key={a.id} value={a.id} className="font-medium">
-                        👤 {a.full_name || a.email} {a.phone ? `(${a.phone})` : ""}
+              {isAgentMode ? (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-foreground">Pipeline Assignment</Label>
+                  <div className="flex items-center gap-2 h-9 px-3 rounded-lg border border-brand/30 bg-card text-xs font-semibold text-brand">
+                    <CheckCircle2 className="h-4 w-4 text-brand shrink-0" />
+                    <span className="truncate">Assigned directly to Your Workspace</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-foreground">
+                    Send / Assign Directly To Agent
+                  </Label>
+                  <Select value={assignedTo} onValueChange={setAssignedTo}>
+                    <SelectTrigger className="h-9 bg-card font-medium text-xs">
+                      <SelectValue placeholder="Select Agent or Leave Unassigned" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="unassigned" className="text-muted-foreground font-normal">
+                        ⚠️ Unassigned (General Lead Pool)
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                      {agents.map((a) => (
+                        <SelectItem key={a.id} value={a.id} className="font-medium">
+                          👤 {a.full_name || a.email} {a.phone ? `(${a.phone})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Folder Date / Batch</Label>

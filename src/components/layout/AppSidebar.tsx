@@ -3,13 +3,14 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard, Users, PhoneCall, CalendarClock, Activity,
   BarChart3, Settings, UserCircle2, FolderPlus, ListChecks,
-  Building2, IdCard, FolderKanban, ArrowLeftRight, Flame, Plus,
+  Building2, IdCard, FolderKanban, ArrowLeftRight, Flame, Plus, UserPlus,
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { cn } from "@/lib/utils";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { Button } from "@/components/ui/button";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
+import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
   SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar,
@@ -81,6 +82,7 @@ export function AppSidebar() {
   const groups = sessionLoading ? [] : session?.isAdmin ? adminGroups : agentGroups;
   const closeMobile = () => setOpenMobile(false);
   const [createInterestedOpen, setCreateInterestedOpen] = useState(false);
+  const [createLeadOpen, setCreateLeadOpen] = useState(false);
 
   return (
     <>
@@ -144,9 +146,24 @@ export function AppSidebar() {
                           )}
                         </SidebarMenuItem>
 
-                        {/* Dedicated Action Button directly below "My Leads" */}
+                        {/* Dedicated Action Buttons directly below "My Leads" */}
                         {item.to === "/my-leads" && !collapsed && (
-                          <div className="px-2 pt-1 pb-1">
+                          <div className="px-2 pt-1 pb-1 flex flex-col gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCreateLeadOpen(true);
+                                closeMobile();
+                              }}
+                              className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold text-brand bg-brand/10 hover:bg-brand/20 border border-brand/25 transition-all shadow-xs group"
+                            >
+                              <div className="flex items-center gap-1.5 truncate">
+                                <UserPlus className="h-3.5 w-3.5 text-brand shrink-0 group-hover:scale-110 transition-transform" />
+                                <span className="truncate">+ Add New Lead</span>
+                              </div>
+                              <Plus className="h-3.5 w-3.5 shrink-0 opacity-70 group-hover:opacity-100" />
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => {
@@ -199,6 +216,14 @@ export function AppSidebar() {
         onOpenChange={setCreateInterestedOpen}
         companyId={session?.companyId ?? null}
         employeeId={session?.userId ?? null}
+      />
+
+      <CreateLeadDialog
+        open={createLeadOpen}
+        onOpenChange={setCreateLeadOpen}
+        companyId={session?.companyId ?? null}
+        employeeId={session?.userId ?? null}
+        isAgentMode={!session?.isAdmin}
       />
     </>
   );

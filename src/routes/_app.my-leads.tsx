@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, CheckCircle2, Clock, Flame, Loader2, MessageCircle,
   PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff, Zap, Sparkles,
-  Award, ShieldCheck,
+  Award, ShieldCheck, UserPlus, Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -16,6 +16,7 @@ import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
+import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { parseInterestedData } from "@/lib/interested-lead";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -48,6 +49,7 @@ function MyLeads() {
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
   const [createInterestedOpen, setCreateInterestedOpen] = useState(false);
+  const [createLeadOpen, setCreateLeadOpen] = useState(false);
   const [autoRefill, setAutoRefill] = useState(true);
   const [claiming, setClaiming] = useState(false);
 
@@ -258,6 +260,14 @@ function MyLeads() {
         description={`${stats.pending} pending · ${stats.called} called · ${stats.assigned} total in queue`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setCreateLeadOpen(true)}
+              className="h-9 font-bold gradient-brand text-white shadow-sm gap-1.5"
+            >
+              <UserPlus className="h-4 w-4" />
+              + Add New Lead
+            </Button>
             <Button
               size="sm"
               onClick={() => setCreateInterestedOpen(true)}
@@ -639,6 +649,23 @@ function MyLeads() {
         onOpenChange={setCreateInterestedOpen}
         companyId={companyId}
         employeeId={userId}
+        onSuccess={() => {
+          refetch();
+          qc.invalidateQueries({ queryKey: ["my-leads"] });
+        }}
+      />
+
+      {/* Create New Lead (Agent Mode) */}
+      <CreateLeadDialog
+        open={createLeadOpen}
+        onOpenChange={setCreateLeadOpen}
+        companyId={companyId}
+        employeeId={userId}
+        isAgentMode={true}
+        onSuccess={() => {
+          refetch();
+          qc.invalidateQueries({ queryKey: ["my-leads"] });
+        }}
       />
     </>
   );
