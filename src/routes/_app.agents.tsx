@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit2, Folder, Loader2, Phone, Plus, Sparkles, Trash2, UserPlus, Users, Zap } from "lucide-react";
+import { Edit2, Eye, Folder, Loader2, Phone, Plus, Sparkles, Trash2, UserPlus, Users, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -205,6 +205,15 @@ function AgentsPage() {
     qc.invalidateQueries({ queryKey: ["agents"] });
     qc.invalidateQueries({ queryKey: ["agent-lead-counts"] });
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-brand" />
+      </div>
+    );
+  }
+  if (!session?.isAdmin) return null;
 
   return (
     <>
