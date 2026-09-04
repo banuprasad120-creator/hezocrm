@@ -31,7 +31,7 @@ import {
 } from "@/lib/lead-batch";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
-import { CONTACTED_STATUSES, inr, type Lead } from "@/lib/crm";
+import { CONTACTED_STATUSES, inr, todayISO, type Lead } from "@/lib/crm";
 
 export const Route = createFileRoute("/_app/my-leads")({
   head: () => ({
@@ -412,7 +412,7 @@ function MyLeads() {
           {batchRemaining === 0 && !claiming && (
             <Button
               size="sm"
-              onClick={() => claimNextBatch(false)}
+              onClick={() => claimNextBatch()}
               className="h-7 text-[11px] font-bold gradient-brand text-white shrink-0"
             >
               <Zap className="mr-1 h-3 w-3 fill-white" /> Get Next Batch
@@ -466,7 +466,7 @@ function MyLeads() {
 
               <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                 <Button
-                  onClick={() => claimNextBatch(false)}
+                  onClick={() => claimNextBatch()}
                   disabled={claiming}
                   className="gradient-brand text-white font-bold h-11 px-6 shadow-md"
                 >
