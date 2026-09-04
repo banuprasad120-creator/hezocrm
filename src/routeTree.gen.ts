@@ -31,6 +31,7 @@ import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as AppRolesRouteImport } from './routes/_app.roles'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppTasksRouteImport } from './routes/_app.tasks'
+import { Route as AppTrashRouteImport } from './routes/_app.trash'
 import { Route as AppLeadLeadIdRouteImport } from './routes/_app.lead.$leadId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -142,6 +143,11 @@ const AppTasksRoute = AppTasksRouteImport.update({
   path: '/tasks',
   getParentRoute: () => AppRoute,
 } as any)
+const AppTrashRoute = AppTrashRouteImport.update({
+  id: '/trash',
+  path: '/trash',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppLeadLeadIdRoute = AppLeadLeadIdRouteImport.update({
   id: '/lead/$leadId',
   path: '/lead/$leadId',
@@ -170,6 +176,7 @@ export interface FileRoutesByFullPath {
   '/roles': typeof AppRolesRoute
   '/settings': typeof AppSettingsRoute
   '/tasks': typeof AppTasksRoute
+  '/trash': typeof AppTrashRoute
   '/lead/$leadId': typeof AppLeadLeadIdRoute
 }
 export interface FileRoutesByTo {
@@ -194,6 +201,7 @@ export interface FileRoutesByTo {
   '/roles': typeof AppRolesRoute
   '/settings': typeof AppSettingsRoute
   '/tasks': typeof AppTasksRoute
+  '/trash': typeof AppTrashRoute
   '/lead/$leadId': typeof AppLeadLeadIdRoute
 }
 export interface FileRoutesById {
@@ -220,6 +228,7 @@ export interface FileRoutesById {
   '/_app/roles': typeof AppRolesRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/tasks': typeof AppTasksRoute
+  '/_app/trash': typeof AppTrashRoute
   '/_app/lead/$leadId': typeof AppLeadLeadIdRoute
 }
 export interface FileRouteTypes {
@@ -246,6 +255,7 @@ export interface FileRouteTypes {
     | '/roles'
     | '/settings'
     | '/tasks'
+    | '/trash'
     | '/lead/$leadId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -270,6 +280,7 @@ export interface FileRouteTypes {
     | '/roles'
     | '/settings'
     | '/tasks'
+    | '/trash'
     | '/lead/$leadId'
   id:
     | '__root__'
@@ -295,6 +306,7 @@ export interface FileRouteTypes {
     | '/_app/roles'
     | '/_app/settings'
     | '/_app/tasks'
+    | '/_app/trash'
     | '/_app/lead/$leadId'
   fileRoutesById: FileRoutesById
 }
@@ -459,6 +471,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppTasksRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/trash': {
+      id: '/_app/trash'
+      path: '/trash'
+      fullPath: '/trash'
+      preLoaderRoute: typeof AppTrashRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/lead/$leadId': {
       id: '/_app/lead/$leadId'
       path: '/lead/$leadId'
@@ -490,6 +509,7 @@ interface AppRouteChildren {
   AppRolesRoute: typeof AppRolesRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppTasksRoute: typeof AppTasksRoute
+  AppTrashRoute: typeof AppTrashRoute
   AppLeadLeadIdRoute: typeof AppLeadLeadIdRoute
 }
 
@@ -514,6 +534,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppRolesRoute: AppRolesRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppTasksRoute: AppTasksRoute,
+  AppTrashRoute: AppTrashRoute,
   AppLeadLeadIdRoute: AppLeadLeadIdRoute,
 }
 

@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Users, PhoneCall, CalendarClock, Activity,
   BarChart3, Settings, UserCircle2, FolderPlus, ListChecks,
   Building2, IdCard, FolderKanban, ArrowLeftRight, Flame, Plus, UserPlus, BookOpen,
+  Trash2,
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ const adminGroups: NavGroup[] = [
       { to: "/diary", title: "Daily Diary", icon: BookOpen },
       { to: "/interested", title: "Interested Leads", icon: Flame },
       { to: "/follow-ups", title: "Follow-ups", icon: CalendarClock },
+      { to: "/trash", title: "Trash", icon: Trash2 },
       { to: "/agents", title: "Agents", icon: Users },
       { to: "/attendance", title: "Attendance", icon: CalendarClock },
     ],
@@ -66,6 +68,7 @@ const agentGroups: NavGroup[] = [
       { to: "/diary", title: "Daily Diary", icon: BookOpen },
       { to: "/interested", title: "Interested Leads", icon: Flame },
       { to: "/follow-ups", title: "Follow-ups", icon: CalendarClock },
+      { to: "/trash", title: "Trash", icon: Trash2 },
       { to: "/attendance", title: "Attendance", icon: CalendarClock },
     ],
   },

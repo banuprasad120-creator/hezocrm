@@ -392,3 +392,155 @@ export const createInterestedCandidateServerFn = createServerFn({
     return { leadId: newLead.id };
   });
 
+const trashLeadSchema = z.object({
+  leadId: z.string(),
+  reason: z.string().default("Out of Service / Invalid Number"),
+});
+
+/** Moves a lead to Trash (Out of Service) and logs call history */
+export const trashLeadServerFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => trashLeadSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { serializeTrashData } = await import("@/lib/trash");
+    const userId = context.userId;
+
+    const { data: userProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .maybeSingle();
+    const companyId = userProfile?.company_id;
+    if (!companyId) throw new Error("User is not associated with any company");
+
+    const { data: lead, error: fetchErr } = await supabaseAdmin
+      .from("leads")
+      .select("id, company_id, status, notes, assigned_to")
+      .eq("id", data.leadId)
+      .single();
+
+    if (fetchErr || !lead) throw new Error("Lead not found");
+    if (lead.company_id !== companyId) throw new Error("Unauthorized lead access");
+
+    const nowISO = new Date().toISOString();
+    const trashedNotes = serializeTrashData(lead.notes, {
+      isTrash: true,
+      reason: data.reason,
+      trashedAt: nowISO,
+      trashedBy: userId,
+      originalStatus: lead.status,
+    });
+
+    // 1. Update lead to Closed with Trash tag
+    const { error: updateErr } = await supabaseAdmin
+      .from("leads")
+      .update({
+        notes: trashedNotes,
+        status: "Closed",
+        last_call_at: nowISO,
+      })
+      .eq("id", data.leadId);
+
+    if (updateErr) throw new Error(updateErr.message);
+
+    // 2. Add history record
+    await supabaseAdmin.from("call_history").insert({
+      lead_id: data.leadId,
+      company_id: companyId,
+      employee_id: userId,
+      call_result: "Switched Off",
+      customer_response: "Other",
+      status: "Wrong Number",
+      notes: `Marked Out of Service / Trashed: ${data.reason}`,
+      called_at: nowISO,
+    });
+
+    return { success: true };
+  });
+
+const restoreLeadSchema = z.object({
+  leadId: z.string(),
+});
+
+/** Restores a lead from Trash back into active queue */
+export const restoreLeadServerFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => restoreLeadSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { serializeTrashData, parseTrashData } = await import("@/lib/trash");
+    const userId = context.userId;
+
+    const { data: userProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .maybeSingle();
+    const companyId = userProfile?.company_id;
+    if (!companyId) throw new Error("User is not associated with any company");
+
+    const { data: lead, error: fetchErr } = await supabaseAdmin
+      .from("leads")
+      .select("id, company_id, status, notes, assigned_to")
+      .eq("id", data.leadId)
+      .single();
+
+    if (fetchErr || !lead) throw new Error("Lead not found");
+    if (lead.company_id !== companyId) throw new Error("Unauthorized lead access");
+
+    const trashData = parseTrashData(lead.notes);
+    const restoredNotes = serializeTrashData(lead.notes, null);
+    const targetStatus = (trashData?.originalStatus as any) || (lead.assigned_to ? "Assigned" : "New");
+
+    const { error: updateErr } = await supabaseAdmin
+      .from("leads")
+      .update({
+        notes: restoredNotes,
+        status: targetStatus,
+      })
+      .eq("id", data.leadId);
+
+    if (updateErr) throw new Error(updateErr.message);
+
+    return { success: true };
+  });
+
+const permanentDeleteLeadSchema = z.object({
+  leadId: z.string(),
+});
+
+/** Permanently deletes a lead and all associated records (Admins only) */
+export const permanentDeleteLeadServerFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => permanentDeleteLeadSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const userId = context.userId;
+
+    const { data: roles } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId);
+    const isAdmin = (roles ?? []).some(
+      (r) => r.role === "company_admin" || r.role === "super_admin"
+    );
+    if (!isAdmin) throw new Error("Forbidden: only company admins can permanently delete leads");
+
+    // Clean up dependent foreign keys
+    await supabaseAdmin.from("call_history").delete().eq("lead_id", data.leadId);
+    await supabaseAdmin.from("lead_assignments").delete().eq("lead_id", data.leadId);
+    await supabaseAdmin.from("follow_ups").delete().eq("lead_id", data.leadId);
+    await supabaseAdmin.from("lead_status_history").delete().eq("lead_id", data.leadId);
+
+    const { error: delErr } = await supabaseAdmin
+      .from("leads")
+      .delete()
+      .eq("id", data.leadId);
+
+    if (delErr) throw new Error(delErr.message);
+
+    return { success: true };
+  });
+
+

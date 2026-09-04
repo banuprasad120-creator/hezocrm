@@ -20,6 +20,8 @@ import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { DiaryDialog } from "@/components/crm/DiaryDialog";
 import { parseInterestedData } from "@/lib/interested-lead";
 import { isDiaryLead, parseDiaryData } from "@/lib/diary";
+import { isTrashLead } from "@/lib/trash";
+import { trashLeadServerFn } from "@/lib/crm.functions";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -115,11 +117,12 @@ function MyLeads() {
     return m;
   }, [followUps]);
 
-  /* ── Deduplicate leads by 10-digit mobile number so agent never sees repeated phone numbers ── */
+  /* ── Deduplicate leads by 10-digit mobile number and exclude Trashed / Out of Service leads ── */
   const uniqueLeads = useMemo(() => {
     const seen = new Set<string>();
     const out: Lead[] = [];
     for (const l of leads) {
+      if (isTrashLead(l.notes)) continue;
       const cleanMob = (l.mobile || "").replace(/\D/g, "").slice(-10);
       if (cleanMob) {
         if (!seen.has(cleanMob)) {
@@ -157,32 +160,24 @@ function MyLeads() {
   const batchRemaining = stats.pending;
   const batchPercent = batchTotal > 0 ? Math.min(100, Math.round((batchCompleted / (batchCompleted + batchRemaining || batchTotal)) * 100)) : 0;
 
-  /* ── Out of Service Mutation ── */
+  /* ── Out of Service (Trash) Mutation ── */
   const outOfServiceM = useMutation({
     mutationFn: async (lead: Lead) => {
-      const now = new Date().toISOString();
-      const { error: histErr } = await supabase.from("call_history").insert({
-        lead_id: lead.id,
-        company_id: lead.company_id,
-        employee_id: userId!,
-        call_result: "Switched Off",
-        customer_response: "Other",
-        status: "Wrong Number",
-        notes: "Marked Out of Service / Deleted",
-        called_at: now,
+      await trashLeadServerFn({
+        data: {
+          leadId: lead.id,
+          reason: "Out of Service / Invalid Number",
+        },
       });
-      if (histErr) throw histErr;
-
-      const { error: delErr } = await supabase.from("leads").delete().eq("id", lead.id);
-      if (delErr) {
-        await supabase.from("leads").update({ status: "Wrong Number", last_call_at: now }).eq("id", lead.id);
-      }
     },
     onSuccess: () => {
-      toast.success("Lead removed (Out of Service)");
+      toast.success("🗑️ Lead moved to Trash (Out of Service)");
       qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["active-batch"] });
+      qc.invalidateQueries({ queryKey: ["trash-leads"] });
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => toast.error(e.message || "Failed to move lead to Trash"),
   });
 
   /* ── Interested Mutation ── */
