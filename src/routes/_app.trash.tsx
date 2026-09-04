@@ -152,25 +152,25 @@ function TrashLeadsPage() {
       {/* Metrics Row */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
-          title="TRASHED LEADS"
+          label="TRASHED LEADS"
           value={metrics.total}
-          subtitle="Out of service or deleted"
+          hint="Out of service or deleted"
           icon={Trash2}
-          color="destructive"
+          tone="destructive"
         />
         <StatCard
-          title="OUT OF SERVICE"
+          label="OUT OF SERVICE"
           value={metrics.outOfService}
-          subtitle="Switched off / unreachable"
+          hint="Switched off / unreachable"
           icon={WifiOff}
-          color="warning"
+          tone="warning"
         />
         <StatCard
-          title="PIPELINE VALUE"
+          label="PIPELINE VALUE"
           value={inr(metrics.totalValue)}
-          subtitle="Total loan requirement"
+          hint="Total loan requirement"
           icon={ShieldAlert}
-          color="muted"
+          tone="brand"
         />
       </div>
 
