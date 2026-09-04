@@ -19,6 +19,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents } from "@/hooks/use-crm-session";
 import { LOAN_TYPES, todayISO } from "@/lib/crm";
+import { createLeadServerFn } from "@/lib/crm.functions";
 
 export const LEAD_SOURCES = [
   "External Lead / Direct",
@@ -132,60 +133,29 @@ export function CreateLeadDialog({
     setSaving(true);
     try {
       const isAssigned = assignedTo !== "unassigned" && Boolean(assignedTo);
-      const now = new Date().toISOString();
+      const parsedAmount = loanAmount ? Number(loanAmount) : 0;
+      const parsedIncome = monthlyIncome ? Number(monthlyIncome) : null;
+      const formattedNotes = notes.trim()
+        ? `[Added Manually - ${source}]: ${notes.trim()}`
+        : `[Added Manually - ${source}]`;
 
-      const leadPayload = {
-        company_id: companyId,
-        customer_name: trimmedName,
-        mobile: digitsOnly,
-        city: city.trim() || null,
-        loan_type: loanType,
-        loan_amount: loanAmount ? Number(loanAmount) : 0,
-        monthly_income: monthlyIncome ? Number(monthlyIncome) : null,
-        employer: employer.trim() || null,
-        employment_type: employmentType || "Salaried",
-        source: source || "External Lead / Direct",
-        folder_date: folderDate || todayISO(),
-        status: isAssigned ? "Assigned" : "New",
-        assigned_to: isAssigned ? assignedTo : null,
-        assigned_at: isAssigned ? now : null,
-        notes: notes.trim() ? `[Added Manually - ${source}]: ${notes.trim()}` : `[Added Manually - ${source}]`,
-        created_at: now,
-      };
-
-      const { data: createdLead, error } = await supabase
-        .from("leads")
-        .insert(leadPayload)
-        .select("id, customer_name, mobile, assigned_to")
-        .single();
-
-      if (error) throw error;
-
-      // If assigned to an agent, also record in lead_assignments
-      if (isAssigned && createdLead) {
-        await supabase.from("lead_assignments").upsert(
-          {
-            lead_id: createdLead.id,
-            company_id: companyId,
-            employee_id: assignedTo,
-            assigned_by: adminUserId || null,
-          },
-          { onConflict: "lead_id" }
-        );
-      }
-
-      // Also ensure any matching phones in company are locked to this agent
-      if (isAssigned) {
-        await supabase
-          .from("leads")
-          .update({
-            assigned_to: assignedTo,
-            assigned_at: now,
-            status: "Assigned",
-          })
-          .eq("mobile", digitsOnly)
-          .eq("company_id", companyId);
-      }
+      await createLeadServerFn({
+        data: {
+          companyId,
+          customerName: trimmedName,
+          mobile: digitsOnly,
+          city: city.trim() || null,
+          loanType,
+          loanAmount: parsedAmount,
+          monthlyIncome: parsedIncome,
+          employer: employer.trim() || null,
+          employmentType: employmentType || "Salaried",
+          source: source || "External Lead / Direct",
+          folderDate: folderDate || todayISO(),
+          notes: formattedNotes,
+          assignedTo: isAssigned ? assignedTo : null,
+        },
+      });
 
       const assignedAgent = agents.find((a) => a.id === assignedTo);
       toast.success(
@@ -200,6 +170,9 @@ export function CreateLeadDialog({
       qc.invalidateQueries({ queryKey: ["agent-lead-counts"] });
       qc.invalidateQueries({ queryKey: ["daily-leads"] });
       qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["interested-leads"] });
+      qc.invalidateQueries({ queryKey: ["leads"] });
 
       resetForm();
       onOpenChange(false);

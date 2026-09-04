@@ -21,6 +21,7 @@ import {
   type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
 import { LOAN_TYPES } from "@/lib/crm";
+import { createInterestedCandidateServerFn } from "@/lib/crm.functions";
 
 interface CreateInterestedCandidateDialogProps {
   open: boolean;
@@ -133,90 +134,41 @@ export function CreateInterestedCandidateDialog({
 
     setBusy(true);
     try {
-      const todayISO = new Date().toISOString().slice(0, 10);
-      const nowISO = new Date().toISOString();
-
-      const interestedData: InterestedLeadData = {
-        serviceRequired,
-        requiredAmount: requiredAmount || undefined,
-        employmentType,
-        salaryBank: employmentType === "Salaried" ? salaryBank : undefined,
-        cibilScore: cibilScore.trim() || undefined,
-        monthlyIncome: monthlyIncome || undefined,
-        employer: employer.trim() || undefined,
-        hasExistingLoans,
-        loansCount: hasExistingLoans ? loans.length : 0,
-        loans: hasExistingLoans ? loans : [],
-        hasCreditCards,
-        cardsCount: hasCreditCards ? creditCards.length : 0,
-        creditCards: hasCreditCards ? creditCards : [],
-        notes: notes.trim() || undefined,
-      };
-
-      const serializedNotes = serializeInterestedData(interestedData, notes);
-      const parsedReqAmount = Number(requiredAmount.replace(/\D/g, "")) || 0;
-      const parsedIncome = Number(monthlyIncome.replace(/\D/g, "")) || null;
-
-      // 1. Insert new Lead record as "Interested"
-      const { data: newLead, error: leadErr } = await supabase
-        .from("leads")
-        .insert({
-          company_id: companyId,
-          assigned_to: employeeId,
-          customer_name: customerName.trim(),
+      const result = await createInterestedCandidateServerFn({
+        data: {
+          companyId,
+          customerName: customerName.trim(),
           mobile: mobile.trim(),
           city: city.trim() || null,
-          loan_type: serviceRequired,
-          loan_amount: parsedReqAmount,
-          employment_type: employmentType,
-          monthly_income: parsedIncome,
+          serviceRequired,
+          requiredAmount: requiredAmount || null,
+          employmentType,
+          salaryBank: employmentType === "Salaried" ? salaryBank : null,
+          cibilScore: cibilScore.trim() || null,
+          monthlyIncome: monthlyIncome || null,
           employer: employer.trim() || null,
-          status: "Interested",
-          notes: serializedNotes,
-          folder_date: todayISO,
-          last_call_at: nowISO,
-        })
-        .select("id")
-        .single();
-
-      if (leadErr || !newLead) {
-        throw new Error(leadErr?.message || "Failed to create candidate");
-      }
-
-      // 2. Insert into call_history
-      await supabase.from("call_history").insert({
-        lead_id: newLead.id,
-        company_id: companyId,
-        employee_id: employeeId,
-        call_result: "Connected",
-        customer_response: "Interested",
-        status: "Interested",
-        notes: `New interested candidate created: ${serviceRequired} (${customerName.trim()})`,
-        called_at: nowISO,
+          hasExistingLoans,
+          loans: hasExistingLoans ? loans : [],
+          hasCreditCards,
+          creditCards: hasCreditCards ? creditCards : [],
+          notes: notes.trim() || null,
+          scheduleFollowUp,
+          followUpDate: followUpDate || null,
+          followUpTime: followUpTime || null,
+        },
       });
-
-      // 3. Schedule follow-up if checked
-      if (scheduleFollowUp && followUpDate) {
-        await supabase.from("follow_ups").insert({
-          company_id: companyId,
-          lead_id: newLead.id,
-          employee_id: employeeId,
-          follow_up_date: followUpDate,
-          follow_up_time: followUpTime || null,
-          notes: `Follow-up for ${customerName.trim()}: ${serviceRequired}`,
-          is_done: false,
-        });
-      }
 
       toast.success(`🎉 Interested candidate "${customerName.trim()}" successfully added!`);
       qc.invalidateQueries({ queryKey: ["my-leads"] });
       qc.invalidateQueries({ queryKey: ["interested-leads"] });
       qc.invalidateQueries({ queryKey: ["my-followups-open"] });
       qc.invalidateQueries({ queryKey: ["agent-lead-counts"] });
+      qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      qc.invalidateQueries({ queryKey: ["leads"] });
 
       resetForm();
       onOpenChange(false);
-      onSuccess?.(newLead.id);
+      onSuccess?.(result.leadId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create interested candidate");
     } finally {
