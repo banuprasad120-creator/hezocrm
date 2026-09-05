@@ -364,6 +364,100 @@ export function CandidateDocumentsDialog({
     toast.success("Copied WhatsApp document request to clipboard!");
   };
 
+  // Download single document file
+  const handleDownloadDoc = (doc: CandidateDocument) => {
+    if (!doc.fileUrl) {
+      toast.error(`No file attached for "${doc.name}"`);
+      return;
+    }
+    const cleanName = (lead?.customer_name || "Candidate").replace(/[^a-zA-Z0-9_-]/g, "_");
+    const docClean = doc.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const filename = doc.fileName || `${cleanName}_${docClean}.pdf`;
+
+    const link = document.createElement("a");
+    link.href = doc.fileUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success(`Downloading ${doc.name} (${filename})`);
+  };
+
+  // Download all uploaded files in batch
+  const handleDownloadAllAttached = () => {
+    const attached = documents.filter((d) => Boolean(d.fileUrl));
+    if (attached.length === 0) {
+      toast.info("No documents have been uploaded yet to download.");
+      return;
+    }
+
+    attached.forEach((doc, idx) => {
+      setTimeout(() => {
+        handleDownloadDoc(doc);
+      }, idx * 350);
+    });
+
+    toast.success(`Starting download for ${attached.length} attached document(s)...`);
+  };
+
+  // Export full verification summary / dossier
+  const handleDownloadDossierReport = () => {
+    if (!lead) return;
+    const lines = [
+      `=============================================================`,
+      `HEZO ENTERPRISE SUITE - CANDIDATE LOAN DOCUMENT DOSSIER`,
+      `=============================================================`,
+      `Candidate Name  : ${lead.customer_name}`,
+      `Mobile Number   : ${lead.mobile}`,
+      `City            : ${lead.city || "N/A"}`,
+      `Loan / Service  : ${parsedLeadData?.serviceRequired || lead.loan_type || "N/A"}`,
+      `Required Amount : ${lead.loan_amount ? inr(Number(lead.loan_amount)) : "N/A"}`,
+      `Employment Type : ${parsedLeadData?.employmentType || lead.employment_type || "Salaried"}`,
+      `Salary Bank     : ${parsedLeadData?.salaryBank || "N/A"}`,
+      `Monthly Income  : ${parsedLeadData?.monthlyIncome ? inr(Number(parsedLeadData.monthlyIncome)) : "N/A"}`,
+      `Employer / Co.  : ${parsedLeadData?.employer || "N/A"}`,
+      `CIBIL Score     : ${parsedLeadData?.cibilScore || "N/A"}`,
+      `Generated Date  : ${new Date().toLocaleString()}`,
+      ``,
+      `=============================================================`,
+      `DOCUMENT VERIFICATION STATUS (${stats.received}/${stats.total} Collected - ${stats.progressPercent}%)`,
+      `=============================================================`,
+      ...documents.map((d, i) => {
+        const check =
+          d.status === "verified"
+            ? "[✓ VERIFIED]"
+            : d.status === "received"
+            ? "[✓ RECEIVED]"
+            : d.status === "rejected"
+            ? "[✗ REJECTED]"
+            : "[ ] PENDING";
+        const fileInfo = d.fileName
+          ? ` (File: ${d.fileName}${d.fileSize ? ` - ${(d.fileSize / 1024).toFixed(0)}KB` : ""})`
+          : " (No file attached)";
+        const notes = d.notes ? ` - Notes: ${d.notes}` : "";
+        const rej = d.rejectionReason ? ` - Rejection Reason: ${d.rejectionReason}` : "";
+        return `${i + 1}. ${check} ${d.name} [${d.category.toUpperCase()}]${
+          d.isMandatory ? " *REQUIRED*" : ""
+        }${fileInfo}${notes}${rej}`;
+      }),
+      ``,
+      `=============================================================`,
+      `END OF REPORT`,
+      `=============================================================`,
+    ];
+
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${(lead.customer_name || "Candidate").replace(/[^a-zA-Z0-9_-]/g, "_")}_Document_Dossier.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success("Downloaded candidate document dossier summary!");
+  };
+
   // Save changes to database
   const handleSave = async () => {
     if (!lead) return;
@@ -438,15 +532,36 @@ export function CandidateDocumentsDialog({
               </div>
 
               {/* Action Buttons in Header */}
-              <div className="flex items-center gap-2 self-start sm:self-auto">
+              <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleDownloadAllAttached}
+                  disabled={documents.filter((d) => Boolean(d.fileUrl)).length === 0}
+                  title="Download all attached documents"
+                  className="h-8 text-xs gap-1.5 border-indigo-500/30 text-indigo-600 hover:bg-indigo-500/10 font-semibold"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Download All ({documents.filter((d) => Boolean(d.fileUrl)).length})</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleDownloadDossierReport}
+                  title="Export complete dossier summary report as text"
+                  className="h-8 text-xs gap-1.5 border-border text-foreground hover:bg-muted"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5 text-brand" />
+                  <span>Dossier</span>
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => setWaPreviewOpen(true)}
-                  className="h-8 text-xs gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
+                  className="h-8 text-xs gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 font-semibold"
                 >
                   <MessageSquare className="h-3.5 w-3.5" />
-                  <span>WhatsApp Request</span>
+                  <span>WhatsApp</span>
                 </Button>
                 <Button
                   size="sm"
@@ -605,12 +720,12 @@ export function CandidateDocumentsDialog({
                           </span>
                         </div>
 
-                        {/* File details or upload prompt */}
+                        {/* File details, download button & upload prompt */}
                         <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                           {doc.fileUrl ? (
-                            <div className="flex items-center gap-2 rounded-lg border bg-background/80 px-2.5 py-1.5 shadow-2xs">
+                            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-background/90 px-3 py-1.5 shadow-xs">
                               <Paperclip className="h-3.5 w-3.5 text-brand shrink-0" />
-                              <span className="font-mono text-xs truncate max-w-[200px]" title={doc.fileName}>
+                              <span className="font-mono text-xs font-medium truncate max-w-[180px]" title={doc.fileName}>
                                 {doc.fileName || "Uploaded File"}
                               </span>
                               {doc.fileSize && (
@@ -618,38 +733,40 @@ export function CandidateDocumentsDialog({
                                   ({(doc.fileSize / 1024).toFixed(0)} KB)
                                 </span>
                               )}
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => setPreviewDoc(doc)}
-                                className="h-6 w-6 p-0 text-brand hover:bg-brand/10"
-                                title="Preview Document"
-                              >
-                                <Eye className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  const link = document.createElement("a");
-                                  link.href = doc.fileUrl!;
-                                  link.download = doc.fileName || "document";
-                                  link.click();
-                                }}
-                                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-                                title="Download File"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => removeAttachment(doc.id)}
-                                className="h-6 w-6 p-0 text-rose-500 hover:bg-rose-500/10"
-                                title="Remove File"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
+
+                              <div className="flex items-center gap-1 border-l pl-2 ml-1">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => handleDownloadDoc(doc)}
+                                  className="h-6 text-[11px] px-2 gap-1 bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20 font-semibold"
+                                  title="Download this document file"
+                                >
+                                  <Download className="h-3 w-3" />
+                                  <span>Download</span>
+                                </Button>
+
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setPreviewDoc(doc)}
+                                  className="h-6 text-[11px] px-2 gap-1 text-muted-foreground hover:text-foreground"
+                                  title="Preview Document"
+                                >
+                                  <Eye className="h-3 w-3" />
+                                  <span>Preview</span>
+                                </Button>
+
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => removeAttachment(doc.id)}
+                                  className="h-6 w-6 p-0 text-rose-500 hover:bg-rose-500/10"
+                                  title="Remove File"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
                             </div>
                           ) : (
                             <Button

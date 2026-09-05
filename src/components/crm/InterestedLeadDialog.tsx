@@ -23,7 +23,7 @@ import {
 } from "@/lib/interested-lead";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { LOAN_TYPES, addDaysISO, type Lead } from "@/lib/crm";
-import { FileCheck, Paperclip, ExternalLink } from "lucide-react";
+import { FileCheck, Paperclip, ExternalLink, Download } from "lucide-react";
 
 interface InterestedLeadDialogProps {
   lead: Lead | null;
@@ -761,6 +761,26 @@ export function InterestedLeadDialog({
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
+                    {doc.fileUrl && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          const link = document.createElement("a");
+                          link.href = doc.fileUrl!;
+                          link.download = doc.fileName || `${doc.name}.pdf`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          toast.success(`Downloading ${doc.name}`);
+                        }}
+                        className="h-6 px-1.5 text-[10px] text-indigo-600 bg-indigo-500/10 hover:bg-indigo-500/20 gap-1 font-semibold"
+                        title="Download Document"
+                      >
+                        <Download className="h-2.5 w-2.5" /> Download
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       size="sm"
