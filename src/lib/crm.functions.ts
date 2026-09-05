@@ -252,6 +252,36 @@ const createInterestedCandidateSchema = z.object({
       })
     )
     .default([]),
+  documents: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        category: z.enum([
+          "identity",
+          "address",
+          "income",
+          "banking",
+          "employment",
+          "business",
+          "loans",
+          "property",
+          "other",
+        ]),
+        status: z.enum(["pending", "requested", "received", "verified", "rejected"]),
+        isMandatory: z.boolean().optional(),
+        fileUrl: z.string().optional(),
+        fileName: z.string().optional(),
+        fileSize: z.number().optional(),
+        fileType: z.string().optional(),
+        uploadedAt: z.string().optional(),
+        verifiedAt: z.string().optional(),
+        verifiedBy: z.string().optional(),
+        rejectionReason: z.string().optional(),
+        notes: z.string().optional(),
+      })
+    )
+    .optional(),
   notes: z.string().optional().nullable(),
   scheduleFollowUp: z.boolean().default(false),
   followUpDate: z.string().optional().nullable(),
@@ -300,6 +330,7 @@ export const createInterestedCandidateServerFn = createServerFn({
       hasCreditCards: data.hasCreditCards,
       cardsCount: data.hasCreditCards ? data.creditCards.length : 0,
       creditCards: data.hasCreditCards ? data.creditCards : [],
+      documents: data.documents && data.documents.length > 0 ? data.documents : undefined,
       notes: data.notes?.trim() || undefined,
     };
 
@@ -370,9 +401,10 @@ export const createInterestedCandidateServerFn = createServerFn({
         lead_id: newLead.id,
         company_id: companyId,
         employee_id: userId,
-        scheduled_at: scheduledAt,
-        status: "Pending",
-        notes: `Follow-up for ${data.serviceRequired} requirement`,
+        follow_up_date: data.followUpDate,
+        follow_up_time: data.followUpTime || null,
+        note: `Follow-up for ${data.serviceRequired} requirement`,
+        is_done: false,
       });
     }
 
@@ -542,5 +574,127 @@ export const permanentDeleteLeadServerFn = createServerFn({ method: "POST" })
 
     return { success: true };
   });
+
+const updateInterestedCandidateDocumentsSchema = z.object({
+  leadId: z.string(),
+  documents: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      category: z.enum([
+        "identity",
+        "address",
+        "income",
+        "banking",
+        "employment",
+        "business",
+        "loans",
+        "property",
+        "other",
+      ]),
+      status: z.enum(["pending", "requested", "received", "verified", "rejected"]),
+      isMandatory: z.boolean().optional(),
+      fileUrl: z.string().optional(),
+      fileName: z.string().optional(),
+      fileSize: z.number().optional(),
+      fileType: z.string().optional(),
+      uploadedAt: z.string().optional(),
+      verifiedAt: z.string().optional(),
+      verifiedBy: z.string().optional(),
+      rejectionReason: z.string().optional(),
+      notes: z.string().optional(),
+    })
+  ),
+  userNotes: z.string().optional().nullable(),
+  logCallHistory: z.boolean().default(true),
+  auditMessage: z.string().optional().nullable(),
+});
+
+/** Securely updates candidate documents and logs verification audit in call history */
+export const updateInterestedCandidateDocumentsServerFn = createServerFn({
+  method: "POST",
+})
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    updateInterestedCandidateDocumentsSchema.parse(input)
+  )
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const {
+      parseInterestedData,
+      serializeInterestedData,
+      getDocumentStats,
+    } = await import("@/lib/interested-lead");
+    const userId = context.userId;
+
+    const { data: userProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("company_id, full_name, email")
+      .eq("id", userId)
+      .maybeSingle();
+    const companyId = userProfile?.company_id;
+    if (!companyId) throw new Error("User is not associated with any company");
+
+    const { data: lead, error: fetchErr } = await supabaseAdmin
+      .from("leads")
+      .select("*")
+      .eq("id", data.leadId)
+      .single();
+
+    if (fetchErr || !lead) throw new Error("Lead not found");
+    if (lead.company_id !== companyId) throw new Error("Unauthorized lead access");
+
+    const parsedData = parseInterestedData(lead.notes) || {
+      serviceRequired: lead.loan_type || "Personal Loan",
+      requiredAmount: lead.loan_amount ? String(lead.loan_amount) : undefined,
+      employmentType: lead.employment_type || "Salaried",
+      hasExistingLoans: false,
+      loansCount: 0,
+      loans: [],
+      hasCreditCards: false,
+      cardsCount: 0,
+      creditCards: [],
+    };
+
+    // Update documents array
+    parsedData.documents = data.documents;
+    const stats = getDocumentStats(data.documents);
+
+    const serializedNotes = serializeInterestedData(
+      parsedData,
+      data.userNotes !== undefined ? data.userNotes || undefined : parsedData.notes
+    );
+
+    const nowISO = new Date().toISOString();
+
+    const { error: updateErr } = await supabaseAdmin
+      .from("leads")
+      .update({
+        notes: serializedNotes,
+        updated_at: nowISO,
+      })
+      .eq("id", data.leadId);
+
+    if (updateErr) throw new Error(updateErr.message);
+
+    // Optional call history log entry for document tracking
+    if (data.logCallHistory) {
+      const agentName = userProfile?.full_name || userProfile?.email || "Agent";
+      const defaultAudit = `📑 Documents updated: ${stats.statusLabel} (${stats.received}/${stats.total} collected, ${stats.verified} verified) by ${agentName}`;
+      await supabaseAdmin.from("call_history").insert({
+        lead_id: lead.id,
+        company_id: companyId,
+        employee_id: userId,
+        call_result: "Connected",
+        customer_response: "Documents Required",
+        status: lead.status,
+        notes: data.auditMessage || defaultAudit,
+        called_at: nowISO,
+      });
+    }
+
+    return { success: true, stats };
+  });
+
 
 

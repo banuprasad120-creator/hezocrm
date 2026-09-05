@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { Building2, CreditCard, Flame, History, MessageCircle, PhoneCall } from "lucide-react";
+import { useState } from "react";
+import { Building2, CreditCard, FileCheck, Flame, History, MessageCircle, PhoneCall, ShieldCheck } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
+import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime, inr, type Lead } from "@/lib/crm";
-import { parseInterestedData } from "@/lib/interested-lead";
+import { getDocumentStats, parseInterestedData } from "@/lib/interested-lead";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -34,6 +36,7 @@ export function AgentLeadSheet({
   onOpenChange: (v: boolean) => void;
   onUpdate?: (lead: Lead) => void;
 }) {
+  const [docsOpen, setDocsOpen] = useState(false);
   const leadId = lead?.id ?? "";
   const interestedData = parseInterestedData(lead?.notes);
 
@@ -207,6 +210,52 @@ export function AgentLeadSheet({
                     <p className="text-muted-foreground">No credit cards</p>
                   )}
                 </div>
+
+                {/* Documents Checklist & Progress */}
+                {interestedData.documents && interestedData.documents.length > 0 && (
+                  <div className="rounded-lg border bg-indigo-500/5 border-indigo-500/15 p-2.5 text-xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                        <FileCheck className="h-3.5 w-3.5" />
+                        Documents ({getDocumentStats(interestedData.documents).received}/{interestedData.documents.length} Collected)
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDocsOpen(true)}
+                        className="h-6 px-1.5 text-[11px] font-bold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-500/10"
+                      >
+                        Manage →
+                      </Button>
+                    </div>
+
+                    <div className="space-y-1 pt-0.5">
+                      {interestedData.documents.slice(0, 4).map((d) => (
+                        <div key={d.id} className="flex items-center justify-between text-[11px] border-b border-muted/30 pb-0.5 last:border-0">
+                          <span className="truncate max-w-[200px] text-foreground font-medium">{d.name}</span>
+                          <span
+                            className={`font-semibold ${
+                              d.status === "verified"
+                                ? "text-emerald-600"
+                                : d.status === "received"
+                                ? "text-amber-600"
+                                : d.status === "rejected"
+                                ? "text-rose-600"
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {d.status === "verified" ? "✓ Verified" : d.status === "received" ? "📥 Received" : d.status === "rejected" ? "✗ Rejected" : "⏳ Pending"}
+                          </span>
+                        </div>
+                      ))}
+                      {interestedData.documents.length > 4 && (
+                        <p className="text-[10px] text-muted-foreground italic">
+                          + {interestedData.documents.length - 4} more documents...
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </Section>
           )}
@@ -270,6 +319,13 @@ export function AgentLeadSheet({
           </Button>
         </div>
       </SheetContent>
+
+      {/* Candidate Documents Modal */}
+      <CandidateDocumentsDialog
+        lead={lead}
+        open={docsOpen}
+        onOpenChange={setDocsOpen}
+      />
     </Sheet>
   );
 }

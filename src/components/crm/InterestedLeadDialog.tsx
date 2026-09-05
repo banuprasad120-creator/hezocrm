@@ -18,9 +18,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import {
   CARD_ISSUERS, TOP_BANKS, parseInterestedData, serializeInterestedData,
-  type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
+  getDefaultDocuments, getDocumentStats,
+  type CandidateDocument, type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
+import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { LOAN_TYPES, addDaysISO, type Lead } from "@/lib/crm";
+import { FileCheck, Paperclip, ExternalLink } from "lucide-react";
 
 interface InterestedLeadDialogProps {
   lead: Lead | null;
@@ -57,6 +60,10 @@ export function InterestedLeadDialog({
   const [hasCreditCards, setHasCreditCards] = useState(false);
   const [creditCards, setCreditCards] = useState<ExistingCreditCard[]>([]);
 
+  // Documents
+  const [documents, setDocuments] = useState<CandidateDocument[]>([]);
+  const [docsModalOpen, setDocsModalOpen] = useState(false);
+
   // Remarks & Follow-up
   const [notes, setNotes] = useState("");
   const [scheduleFollowUp, setScheduleFollowUp] = useState(false);
@@ -81,6 +88,15 @@ export function InterestedLeadDialog({
         setLoans(parsed.loans || []);
         setHasCreditCards(parsed.hasCreditCards);
         setCreditCards(parsed.creditCards || []);
+        setDocuments(
+          parsed.documents && parsed.documents.length > 0
+            ? parsed.documents
+            : getDefaultDocuments(
+                parsed.employmentType || (lead.employment_type as string) || "Salaried",
+                parsed.serviceRequired || lead.loan_type || "Personal Loan",
+                parsed.hasExistingLoans
+              )
+        );
         setNotes(parsed.notes || "");
       } else {
         setServiceRequired(lead.loan_type || "Personal Loan");
@@ -96,6 +112,13 @@ export function InterestedLeadDialog({
         setLoans([{ bank: "HDFC Bank", loanType: "Personal Loan", amount: "", emi: "" }]);
         setHasCreditCards(false);
         setCreditCards([{ bank: "HDFC Bank", limit: "", outstanding: "" }]);
+        setDocuments(
+          getDefaultDocuments(
+            (lead.employment_type as string) || "Salaried",
+            lead.loan_type || "Personal Loan",
+            false
+          )
+        );
         setNotes("");
       }
       setScheduleFollowUp(false);
@@ -168,6 +191,7 @@ export function InterestedLeadDialog({
         hasCreditCards,
         cardsCount: hasCreditCards ? creditCards.length : 0,
         creditCards: hasCreditCards ? creditCards : [],
+        documents: documents && documents.length > 0 ? documents : undefined,
         notes: notes.trim() || undefined,
       };
 
@@ -696,6 +720,91 @@ export function InterestedLeadDialog({
             )}
           </div>
 
+          {/* SECTION 5: Candidate Documents Checklist */}
+          <div className="rounded-xl border bg-card p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileCheck className="h-4 w-4 text-indigo-500" />
+                <Label className="text-xs font-bold text-foreground">
+                  Documents & Verification Checklist ({getDocumentStats(documents).received}/{documents.length} Collected)
+                </Label>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setDocsModalOpen(true)}
+                className="h-7 text-[11px] gap-1 text-indigo-600 border-indigo-500/30 hover:bg-indigo-500/10"
+              >
+                <ExternalLink className="h-3 w-3" /> Full Docs Manager
+              </Button>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              {documents.map((doc, idx) => (
+                <div
+                  key={doc.id || idx}
+                  className="flex items-center justify-between p-2 rounded-lg border bg-muted/20 text-xs gap-2"
+                >
+                  <div className="min-w-0 flex-1 truncate">
+                    <span className="font-semibold text-foreground truncate">{doc.name}</span>
+                    {doc.isMandatory && (
+                      <span className="ml-1.5 text-[10px] text-rose-500 font-bold bg-rose-500/10 px-1.5 py-0.5 rounded">
+                        Required
+                      </span>
+                    )}
+                    {doc.fileName && (
+                      <span className="ml-1.5 text-[10px] text-brand font-mono">
+                        📎 {doc.fileName}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={doc.status === "received" ? "secondary" : "ghost"}
+                      onClick={() =>
+                        setDocuments((prev) =>
+                          prev.map((d, i) =>
+                            i === idx ? { ...d, status: d.status === "received" ? "pending" : "received" } : d
+                          )
+                        )
+                      }
+                      className={`h-6 px-2 text-[10px] ${
+                        doc.status === "received"
+                          ? "bg-amber-500/20 text-amber-600 font-bold"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      📥 Received
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={doc.status === "verified" ? "default" : "outline"}
+                      onClick={() =>
+                        setDocuments((prev) =>
+                          prev.map((d, i) =>
+                            i === idx ? { ...d, status: d.status === "verified" ? "pending" : "verified" } : d
+                          )
+                        )
+                      }
+                      className={`h-6 px-2 text-[10px] ${
+                        doc.status === "verified"
+                          ? "bg-emerald-600 text-white font-bold"
+                          : "text-emerald-600 border-emerald-500/30"
+                      }`}
+                    >
+                      ✓ Verified
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* SECTION 5: Notes & Follow-up */}
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <div className="space-y-1.5">
@@ -789,6 +898,19 @@ export function InterestedLeadDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Candidate Documents Full Modal */}
+      <CandidateDocumentsDialog
+        lead={lead}
+        open={docsModalOpen}
+        onOpenChange={setDocsModalOpen}
+        onSuccess={() => {
+          if (lead) {
+            const parsed = parseInterestedData(lead.notes);
+            if (parsed?.documents) setDocuments(parsed.documents);
+          }
+        }}
+      />
     </Dialog>
   );
 }

@@ -2,8 +2,26 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Building2, CalendarClock, CreditCard, Download, Eye, Flame, Landmark,
-  Loader2, MessageCircle, Phone, PhoneCall, RefreshCw, Search, Sparkles, User,
+  Building2,
+  CalendarClock,
+  CheckCircle2,
+  CreditCard,
+  Download,
+  Eye,
+  FileCheck,
+  FileText,
+  Flame,
+  Landmark,
+  Loader2,
+  MessageCircle,
+  Phone,
+  PhoneCall,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  User,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -15,19 +33,23 @@ import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
+import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { formatDateTime, inr, type Lead } from "@/lib/crm";
-import { parseInterestedData, TOP_BANKS } from "@/lib/interested-lead";
-import { Plus } from "lucide-react";
+import {
+  getDocumentStats,
+  parseInterestedData,
+  TOP_BANKS,
+} from "@/lib/interested-lead";
 
 export const Route = createFileRoute("/_app/interested")({
   head: () => ({
     meta: [
-      { title: "Interested Leads — Hezo CRM" },
-      { name: "description", content: "Customers who accepted service. View existing loans, credit cards and bank profiles." },
-      { property: "og:title", content: "Interested Leads — Hezo CRM" },
-      { property: "og:description", content: "Track interested leads, banks and loan requirements." },
+      { title: "Interested Leads & Documents — Hezo CRM" },
+      { name: "description", content: "Customers who accepted service. Manage candidate documents, loans and banking profiles." },
+      { property: "og:title", content: "Interested Leads & Documents — Hezo CRM" },
+      { property: "og:description", content: "Track interested leads, candidate document checklists, banks and loan requirements." },
     ],
   }),
   component: InterestedLeadsPage,
@@ -43,9 +65,11 @@ function InterestedLeadsPage() {
   const [q, setQ] = useState("");
   const [selectedAgent, setSelectedAgent] = useState("all");
   const [selectedBank, setSelectedBank] = useState("all");
+  const [selectedDocFilter, setSelectedDocFilter] = useState("all");
   const [folderDate, setFolderDate] = useState("");
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [editLead, setEditLead] = useState<Lead | null>(null);
+  const [docsLead, setDocsLead] = useState<Lead | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
@@ -75,13 +99,15 @@ function InterestedLeadsPage() {
     return map;
   }, [agents]);
 
-  // Enrich leads with parsed questionnaire data
+  // Enrich leads with parsed questionnaire & documents data
   const enrichedLeads = useMemo(() => {
     return rawLeads.map((lead) => {
       const parsed = parseInterestedData(lead.notes);
+      const docStats = getDocumentStats(parsed?.documents);
       return {
         ...lead,
         interestedData: parsed,
+        docStats,
         agentName: lead.assigned_to ? agentMap.get(lead.assigned_to) || "Assigned Agent" : "Unassigned",
       };
     });
@@ -106,15 +132,23 @@ function InterestedLeadsPage() {
         const hasInCards = data?.creditCards?.some((card) => card.bank.toLowerCase().includes(selectedBank.toLowerCase()));
         if (!hasInLoans && !hasInCards) return false;
       }
+      if (selectedDocFilter !== "all") {
+        const stats = l.docStats;
+        if (selectedDocFilter === "verified" && stats.verified < stats.total) return false;
+        if (selectedDocFilter === "received" && (stats.received === 0 || stats.verified === stats.total)) return false;
+        if (selectedDocFilter === "pending" && stats.received > 0) return false;
+      }
       return true;
     });
-  }, [enrichedLeads, q, selectedAgent, selectedBank, folderDate]);
+  }, [enrichedLeads, q, selectedAgent, selectedBank, folderDate, selectedDocFilter]);
 
   // Metrics
   const metrics = useMemo(() => {
     let totalReqAmount = 0;
     let totalLoansCount = 0;
     let totalCardsCount = 0;
+    let totalDocsCollectedCount = 0;
+    let totalDocsVerifiedCount = 0;
 
     for (const l of filteredLeads) {
       totalReqAmount += Number(l.loan_amount) || 0;
@@ -124,6 +158,12 @@ function InterestedLeadsPage() {
       if (l.interestedData?.hasCreditCards) {
         totalCardsCount += l.interestedData.creditCards?.length || 0;
       }
+      if (l.docStats?.received > 0) {
+        totalDocsCollectedCount++;
+      }
+      if (l.docStats?.total > 0 && l.docStats.verified === l.docStats.total) {
+        totalDocsVerifiedCount++;
+      }
     }
 
     return {
@@ -131,6 +171,8 @@ function InterestedLeadsPage() {
       totalReqAmount,
       totalLoansCount,
       totalCardsCount,
+      totalDocsCollectedCount,
+      totalDocsVerifiedCount,
     };
   }, [filteredLeads]);
 
@@ -147,6 +189,7 @@ function InterestedLeadsPage() {
       "Service Years", "Employer", "Monthly Income",
       "Existing Loans Count", "Existing Loans Details",
       "Credit Cards Count", "Credit Cards Details",
+      "Documents Status", "Documents Progress", "Documents List",
       "Assigned Agent", "Folder Date", "Last Call Date", "Notes"
     ];
 
@@ -155,6 +198,8 @@ function InterestedLeadsPage() {
       const loanDetails = data?.loans?.map((ln) => `${ln.bank} (${ln.loanType}${ln.amount ? `: Rs.${ln.amount}` : ""})`).join("; ") || "None";
       const cardDetails = data?.creditCards?.map((cd) => `${cd.bank}${cd.limit ? ` (Limit: Rs.${cd.limit})` : ""}`).join("; ") || "None";
       const otherAccounts = data?.bankAccounts?.join("; ") || "None";
+      const docsSummary = data?.documents?.map((d) => `${d.name} [${d.status.toUpperCase()}]`).join("; ") || "None";
+      const docProgress = `${l.docStats.received}/${l.docStats.total} (${l.docStats.progressPercent}%)`;
 
       return [
         `"${l.customer_name.replace(/"/g, '""')}"`,
@@ -173,6 +218,9 @@ function InterestedLeadsPage() {
         `"${loanDetails.replace(/"/g, '""')}"`,
         `"${data?.creditCards?.length || 0}"`,
         `"${cardDetails.replace(/"/g, '""')}"`,
+        `"${l.docStats.statusLabel}"`,
+        `"${docProgress}"`,
+        `"${docsSummary.replace(/"/g, '""')}"`,
         `"${l.agentName}"`,
         `"${l.folder_date}"`,
         `"${l.last_call_at ? formatDateTime(l.last_call_at) : ""}"`,
@@ -184,7 +232,7 @@ function InterestedLeadsPage() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Interested_Leads_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute("download", `Interested_Leads_With_Docs_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -194,8 +242,8 @@ function InterestedLeadsPage() {
   return (
     <>
       <PageHeader
-        title="Interested Leads"
-        description="Customers who accepted service. View captured existing loans, banks and credit cards."
+        title="Interested Leads & Documents"
+        description="Customers who accepted service. Manage candidate document checklists, loans, and banking profiles."
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -217,11 +265,22 @@ function InterestedLeadsPage() {
       />
 
       {/* KPI Stats */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
         <StatCard label="Interested Leads" value={metrics.count} icon={Flame} tone="success" />
         <StatCard label="Total Requirement" value={inr(metrics.totalReqAmount)} icon={Landmark} tone="brand" />
-        <StatCard label="Existing Loans Tracked" value={metrics.totalLoansCount} icon={Building2} tone="warning" />
-        <StatCard label="Credit Cards Tracked" value={metrics.totalCardsCount} icon={CreditCard} tone="info" />
+        <StatCard
+          label="Docs In Progress"
+          value={`${metrics.totalDocsCollectedCount} / ${metrics.count}`}
+          icon={FileCheck}
+          tone="info"
+        />
+        <StatCard
+          label="Docs Fully Verified"
+          value={metrics.totalDocsVerifiedCount}
+          icon={ShieldCheck}
+          tone="success"
+        />
+        <StatCard label="Credit Cards" value={metrics.totalCardsCount} icon={CreditCard} tone="warning" />
       </div>
 
       {/* Filter Bar */}
@@ -237,9 +296,22 @@ function InterestedLeadsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Document Status Filter */}
+          <Select value={selectedDocFilter} onValueChange={setSelectedDocFilter}>
+            <SelectTrigger className="h-9 text-xs w-[150px]">
+              <SelectValue placeholder="All Documents" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">📑 All Documents</SelectItem>
+              <SelectItem value="verified">✅ All Docs Verified</SelectItem>
+              <SelectItem value="received">📥 Docs In Progress</SelectItem>
+              <SelectItem value="pending">⏳ Docs Pending</SelectItem>
+            </SelectContent>
+          </Select>
+
           {isAdmin && (
             <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-              <SelectTrigger className="h-9 text-xs w-[140px]"><SelectValue placeholder="All Agents" /></SelectTrigger>
+              <SelectTrigger className="h-9 text-xs w-[130px]"><SelectValue placeholder="All Agents" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Agents</SelectItem>
                 {agents.map((a) => (
@@ -250,7 +322,7 @@ function InterestedLeadsPage() {
           )}
 
           <Select value={selectedBank} onValueChange={setSelectedBank}>
-            <SelectTrigger className="h-9 text-xs w-[140px]"><SelectValue placeholder="All Banks" /></SelectTrigger>
+            <SelectTrigger className="h-9 text-xs w-[130px]"><SelectValue placeholder="All Banks" /></SelectTrigger>
             <SelectContent className="max-h-56">
               <SelectItem value="all">All Banks</SelectItem>
               {TOP_BANKS.map((b) => (
@@ -279,7 +351,7 @@ function InterestedLeadsPage() {
           <Sparkles className="mb-3 h-10 w-10 text-muted-foreground" />
           <p className="text-base font-bold text-foreground">No interested leads found</p>
           <p className="mt-1 text-xs text-muted-foreground max-w-sm">
-            When agents call customers and mark them as <strong>Interested</strong>, they will appear here with existing loans and credit card details.
+            When agents call customers and mark them as <strong>Interested</strong>, they will appear here with existing loans, documents, and credit card details.
           </p>
         </div>
       )}
@@ -290,6 +362,7 @@ function InterestedLeadsPage() {
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {filteredLeads.map((lead) => {
               const data = lead.interestedData;
+              const docStats = lead.docStats;
               const hasLoans = data?.hasExistingLoans && data.loans?.length > 0;
               const hasCards = data?.hasCreditCards && data.creditCards?.length > 0;
 
@@ -307,6 +380,33 @@ function InterestedLeadsPage() {
                           <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-bold text-success flex items-center gap-1">
                             <Flame className="h-3 w-3 fill-success" /> Interested
                           </span>
+
+                          {/* Document Checklist Badge */}
+                          {docStats.total > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setDocsLead(lead)}
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-bold flex items-center gap-1 border transition-colors hover:scale-105 ${
+                                docStats.verified === docStats.total
+                                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                                  : docStats.received > 0
+                                  ? "bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400"
+                                  : "bg-muted/60 border-muted text-muted-foreground"
+                              }`}
+                              title="Click to manage candidate documents"
+                            >
+                              <FileCheck className="h-3 w-3" /> Docs: {docStats.received}/{docStats.total} ({docStats.progressPercent}%)
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setDocsLead(lead)}
+                              className="rounded-full px-2 py-0.5 text-[11px] font-medium bg-muted/40 border border-dashed text-muted-foreground hover:border-brand hover:text-brand"
+                            >
+                              + Add Documents
+                            </button>
+                          )}
+
                           {data?.cibilScore ? (
                             <span className="rounded-full bg-indigo-500/15 border border-indigo-500/30 px-2 py-0.5 text-[11px] font-bold text-indigo-500">
                               🛡️ CIBIL: {data.cibilScore === "0" ? "0 (No CIBIL)" : data.cibilScore}
@@ -328,8 +428,47 @@ function InterestedLeadsPage() {
                       </div>
                     </div>
 
-                    {/* Breakdown of Loans & Cards */}
+                    {/* Breakdown of Documents, Loans & Cards */}
                     <div className="mt-3.5 space-y-3">
+                      {/* Documents Mini Preview Section */}
+                      {data?.documents && data.documents.length > 0 && (
+                        <div
+                          className="rounded-xl border bg-indigo-500/5 border-indigo-500/15 p-3 cursor-pointer hover:bg-indigo-500/10 transition-colors"
+                          onClick={() => setDocsLead(lead)}
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                              <FileCheck className="h-3.5 w-3.5" />
+                              Documents Checklist ({docStats.received}/{docStats.total} Ready)
+                            </p>
+                            <span className="text-[11px] text-indigo-500 font-semibold hover:underline">
+                              Manage Docs →
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5 text-xs">
+                            {data.documents.slice(0, 4).map((d) => (
+                              <div key={d.id} className="flex items-center gap-1.5 truncate text-[11px]">
+                                {d.status === "verified" ? (
+                                  <span className="text-emerald-500">✓</span>
+                                ) : d.status === "received" ? (
+                                  <span className="text-amber-500">📥</span>
+                                ) : d.status === "rejected" ? (
+                                  <span className="text-rose-500">✗</span>
+                                ) : (
+                                  <span className="text-muted-foreground">⏳</span>
+                                )}
+                                <span className="truncate text-foreground/90">{d.name}</span>
+                              </div>
+                            ))}
+                            {data.documents.length > 4 && (
+                              <div className="text-[11px] text-muted-foreground italic col-span-2">
+                                + {data.documents.length - 4} more documents...
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Existing Loans */}
                       <div className="rounded-xl border bg-muted/20 p-3">
                         <p className="text-[11px] font-bold uppercase tracking-wider text-amber-500 flex items-center gap-1.5 mb-1.5">
@@ -433,6 +572,15 @@ function InterestedLeadsPage() {
                           <MessageCircle className="h-3.5 w-3.5" />
                         </a>
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs font-semibold border-indigo-500/30 text-indigo-600 hover:bg-indigo-500/10 gap-1"
+                        onClick={() => setDocsLead(lead)}
+                      >
+                        <FileCheck className="h-3.5 w-3.5" />
+                        <span>Docs</span>
+                      </Button>
                       <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setViewLead(lead)}>
                         View
                       </Button>
@@ -447,6 +595,15 @@ function InterestedLeadsPage() {
           </div>
         </div>
       )}
+
+      {/* Candidate Documents Modal */}
+      <CandidateDocumentsDialog
+        lead={docsLead}
+        agentName={session?.fullName || "Agent"}
+        open={Boolean(docsLead)}
+        onOpenChange={(o) => !o && setDocsLead(null)}
+        onSuccess={() => refetch()}
+      />
 
       {/* View Lead Sheet */}
       <AgentLeadSheet

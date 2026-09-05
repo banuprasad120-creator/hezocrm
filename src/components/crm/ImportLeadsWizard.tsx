@@ -23,6 +23,7 @@ import {
   runBatchedImport, updateImportRecord,
   type BatchState, type Canceller, type ImportContext,
 } from "@/lib/lead-import-runner";
+import { todayISO } from "@/lib/crm";
 
 const STEPS = ["Upload", "Map Columns", "Preview & Validate", "Import"] as const;
 

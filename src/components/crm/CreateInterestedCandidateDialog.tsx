@@ -17,7 +17,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
-  CARD_ISSUERS, TOP_BANKS, serializeInterestedData,
+  CARD_ISSUERS, TOP_BANKS, getDefaultDocuments, serializeInterestedData,
   type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
 import { LOAN_TYPES } from "@/lib/crm";
@@ -151,6 +151,11 @@ export function CreateInterestedCandidateDialog({
           loans: hasExistingLoans ? loans : [],
           hasCreditCards,
           creditCards: hasCreditCards ? creditCards : [],
+          documents: getDefaultDocuments(
+            employmentType,
+            serviceRequired,
+            hasExistingLoans
+          ),
           notes: notes.trim() || null,
           scheduleFollowUp,
           followUpDate: followUpDate || null,

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock, CheckCircle2, Clock, Flame, Loader2, MessageCircle,
   PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff, Zap, Sparkles,
-  Award, ShieldCheck, UserPlus, Plus, BookOpen, Download,
+  Award, ShieldCheck, UserPlus, Plus, BookOpen, Download, FileCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -16,9 +16,10 @@ import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
+import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { DiaryDialog } from "@/components/crm/DiaryDialog";
-import { parseInterestedData } from "@/lib/interested-lead";
+import { getDocumentStats, parseInterestedData } from "@/lib/interested-lead";
 import { isDiaryLead, parseDiaryData } from "@/lib/diary";
 import { isTrashLead } from "@/lib/trash";
 import { trashLeadServerFn } from "@/lib/crm.functions";
@@ -53,6 +54,7 @@ function MyLeads() {
   const [active, setActive] = useState<Lead | null>(null);
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
+  const [docsLead, setDocsLead] = useState<Lead | null>(null);
   const [diaryLead, setDiaryLead] = useState<Lead | null>(null);
   const [createInterestedOpen, setCreateInterestedOpen] = useState(false);
   const [createLeadOpen, setCreateLeadOpen] = useState(false);
@@ -523,6 +525,15 @@ function MyLeads() {
                                 💳 Active Loans: <strong className="text-foreground">{intData.loans.length}</strong>
                               </div>
                             )}
+                            {intData?.documents && intData.documents.length > 0 && (
+                              <div
+                                className="flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 font-semibold cursor-pointer hover:underline"
+                                onClick={() => setDocsLead(l)}
+                              >
+                                <FileCheck className="h-3.5 w-3.5" />
+                                <span>Docs: {getDocumentStats(intData.documents).received}/{intData.documents.length} ({getDocumentStats(intData.documents).progressPercent}%)</span>
+                              </div>
+                            )}
                             {l.loan_amount && (
                               <div className="text-muted-foreground">
                                 💰 Required Loan: <strong className="text-foreground">{inr(Number(l.loan_amount))}</strong> ({l.loan_type})
@@ -541,6 +552,16 @@ function MyLeads() {
                             {l.city || "—"} · {l.folder_date}
                           </span>
                           <div className="flex items-center gap-1">
+                            {l.status === "Interested" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs font-semibold border-indigo-500/30 text-indigo-600 hover:bg-indigo-500/10"
+                                onClick={() => setDocsLead(l)}
+                              >
+                                Docs
+                              </Button>
+                            )}
                             <Button asChild size="sm" variant="outline" className="h-7 text-xs font-semibold">
                               <a href={`tel:${l.mobile}`}>Call</a>
                             </Button>
@@ -585,6 +606,18 @@ function MyLeads() {
           }}
         />
       )}
+
+      {/* Candidate Documents Modal */}
+      <CandidateDocumentsDialog
+        lead={docsLead}
+        agentName={session?.fullName || "Agent"}
+        open={Boolean(docsLead)}
+        onOpenChange={(o) => !o && setDocsLead(null)}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ["my-leads"] });
+          qc.invalidateQueries({ queryKey: ["interested-leads"] });
+        }}
+      />
 
       {/* View Lead Sheet */}
       <AgentLeadSheet
