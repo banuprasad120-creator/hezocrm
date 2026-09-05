@@ -17,7 +17,7 @@ import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
-import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
+import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_app/leads")({
@@ -516,7 +516,7 @@ function LeadsPage() {
                           <a href={`tel:${l.mobile}`}><Phone className="h-3.5 w-3.5 text-brand" /> Call</a>
                         </Button>
                         <Button asChild variant="outline" size="sm" className="h-8 gap-1 text-xs">
-                          <a href={`https://wa.me/${l.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+                          <a href={getWhatsAppUrl(l.mobile)} target="_blank" rel="noreferrer">
                             <MessageCircle className="h-3.5 w-3.5 text-success" /> WhatsApp
                           </a>
                         </Button>
@@ -599,7 +599,7 @@ function LeadsPage() {
                               <a href={`tel:${l.mobile}`}><Phone className="h-4 w-4" /></a>
                             </Button>
                             <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="WhatsApp">
-                              <a href={`https://wa.me/${l.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+                              <a href={getWhatsAppUrl(l.mobile)} target="_blank" rel="noreferrer">
                                 <MessageCircle className="h-4 w-4" />
                               </a>
                             </Button>

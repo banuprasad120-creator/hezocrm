@@ -364,6 +364,16 @@ export function formatWhatsAppPhone(rawPhone?: string | null): string {
   return digits;
 }
 
+/** Generates direct WhatsApp chat URL that opens the conversation and pre-fills message text */
+export function getWhatsAppUrl(rawPhone?: string | null, text?: string): string {
+  const phone = formatWhatsAppPhone(rawPhone);
+  if (!phone) return "https://api.whatsapp.com";
+  if (text) {
+    return `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`;
+  }
+  return `https://api.whatsapp.com/send?phone=${phone}`;
+}
+
 /** 1. Document Request Checklist WhatsApp Template */
 export function generateWhatsAppDocumentRequestMessage(
   customerName: string,

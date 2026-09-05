@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { supabase } from "@/integrations/supabase/client";
-import { formatDateTime, inr, type Lead } from "@/lib/crm";
+import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { getDocumentStats, parseInterestedData } from "@/lib/interested-lead";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
@@ -104,8 +104,8 @@ export function AgentLeadSheet({
             <Button asChild className="h-10 flex-1 gradient-brand text-white">
               <a href={`tel:${lead.mobile}`}><PhoneCall className="mr-1.5 h-4 w-4" /> CALL</a>
             </Button>
-            <Button asChild variant="outline" className="h-10">
-              <a href={`https://wa.me/${lead.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+            <Button asChild variant="outline" className="h-10 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
+              <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer">
                 <MessageCircle className="h-4 w-4" />
               </a>
             </Button>

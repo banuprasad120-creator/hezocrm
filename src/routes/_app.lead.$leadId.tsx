@@ -11,7 +11,7 @@ import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
-import { formatDateTime, inr, type Lead } from "@/lib/crm";
+import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { parseInterestedData } from "@/lib/interested-lead";
 
 export const Route = createFileRoute("/_app/lead/$leadId")({
@@ -155,8 +155,8 @@ function LeadDetail() {
             <Button asChild size="sm" className="h-9 gradient-brand text-xs font-bold text-white shadow-sm sm:text-sm">
               <a href={`tel:${lead.mobile}`}><PhoneCall className="mr-1 h-3.5 w-3.5" /> CALL</a>
             </Button>
-            <Button asChild variant="outline" size="sm" className="h-9 text-xs sm:text-sm">
-              <a href={`https://wa.me/${lead.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+            <Button asChild variant="outline" size="sm" className="h-9 text-xs sm:text-sm border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
+              <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer">
                 WhatsApp
               </a>
             </Button>

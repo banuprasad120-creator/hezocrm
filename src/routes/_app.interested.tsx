@@ -36,7 +36,7 @@ import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterest
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
-import { formatDateTime, inr, type Lead } from "@/lib/crm";
+import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import {
   getDocumentStats,
   parseInterestedData,
@@ -567,8 +567,16 @@ function InterestedLeadsPage() {
                           <PhoneCall className="mr-1 h-3.5 w-3.5" /> Call
                         </a>
                       </Button>
-                      <Button asChild size="sm" variant="outline" className="h-8 text-xs">
-                        <a href={`https://wa.me/${lead.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+                      <Button asChild size="sm" variant="outline" className="h-8 text-xs border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
+                        <a
+                          href={getWhatsAppUrl(
+                            lead.mobile,
+                            `Hello ${lead.customer_name}, regarding your ${lead.loan_type || "Loan"} inquiry with Hezo Financial Advisory...`
+                          )}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Open WhatsApp Chat"
+                        >
                           <MessageCircle className="h-3.5 w-3.5" />
                         </a>
                       </Button>

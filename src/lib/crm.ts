@@ -76,3 +76,29 @@ export function formatDateTime(value: string) {
     day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
+
+/** Formats phone number to international WhatsApp format (+91 for India) */
+export function formatWhatsAppPhone(rawPhone?: string | null): string {
+  if (!rawPhone) return "";
+  let digits = rawPhone.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `91${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("0")) {
+    return `91${digits.slice(1)}`;
+  }
+  if (digits.length === 12 && digits.startsWith("91")) {
+    return digits;
+  }
+  return digits;
+}
+
+/** Generates direct WhatsApp chat URL that opens the conversation and pre-fills message text */
+export function getWhatsAppUrl(rawPhone?: string | null, text?: string): string {
+  const phone = formatWhatsAppPhone(rawPhone);
+  if (!phone) return "https://api.whatsapp.com";
+  if (text) {
+    return `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`;
+  }
+  return `https://api.whatsapp.com/send?phone=${phone}`;
+}

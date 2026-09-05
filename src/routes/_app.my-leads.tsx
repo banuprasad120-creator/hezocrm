@@ -32,7 +32,7 @@ import {
 } from "@/lib/lead-batch";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
-import { CONTACTED_STATUSES, inr, todayISO, type Lead } from "@/lib/crm";
+import { CONTACTED_STATUSES, inr, todayISO, getWhatsAppUrl, type Lead } from "@/lib/crm";
 
 export const Route = createFileRoute("/_app/my-leads")({
   head: () => ({
@@ -877,7 +877,7 @@ function LeadCard({
             <a href={`tel:${lead.mobile}`}><PhoneCall className="h-4 w-4" /> Call</a>
           </Button>
           <Button asChild variant="outline" size="sm" className="h-9 gap-1.5">
-            <a href={`https://wa.me/${lead.mobile.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">
+            <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer">
               <MessageCircle className="h-4 w-4 text-success" /> WhatsApp
             </a>
           </Button>
