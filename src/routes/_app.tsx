@@ -3,6 +3,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
+import { FollowUpAlarmManager } from "@/components/crm/FollowUpAlarmManager";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_app")({
@@ -30,6 +31,7 @@ function AppLayout() {
           </main>
         </SidebarInset>
         <MobileBottomNav />
+        <FollowUpAlarmManager />
       </div>
     </SidebarProvider>
   );

@@ -899,6 +899,11 @@ export function InterestedLeadDialog({
                     />
                   </div>
                 </div>
+
+                <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+                  <span className="animate-pulse">🔔</span>
+                  <span>An <strong>audible chime alarm</strong> will ring and alert you when this callback time arrives.</span>
+                </div>
               </div>
             )}
           </div>

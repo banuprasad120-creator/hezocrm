@@ -21,7 +21,7 @@ import {
   CARD_ISSUERS, TOP_BANKS, getDefaultDocuments, getDocumentStats, serializeInterestedData,
   type CandidateDocument, type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
-import { LOAN_TYPES } from "@/lib/crm";
+import { LOAN_TYPES, addDaysISO } from "@/lib/crm";
 import { createInterestedCandidateServerFn } from "@/lib/crm.functions";
 
 interface CreateInterestedCandidateDialogProps {
@@ -585,24 +585,62 @@ export function CreateInterestedCandidateDialog({
             </div>
 
             {scheduleFollowUp && (
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <div>
-                  <Label className="text-[11px]">Follow-up Date *</Label>
-                  <Input
-                    type="date"
-                    className="mt-1 h-8 text-xs"
-                    value={followUpDate}
-                    onChange={(e) => setFollowUpDate(e.target.value)}
-                  />
+              <div className="space-y-3 pt-1">
+                <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                  <span className="text-[11px] text-muted-foreground font-semibold">Quick Presets:</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setFollowUpDate(addDaysISO(30)); setNotes((n) => n ? `${n} | 1-month follow-up` : "Recheck CIBIL & profile in 1 month"); }}
+                    className="h-6 px-2 text-[11px] font-bold text-indigo-500 bg-indigo-500/10 hover:bg-indigo-500/20"
+                  >
+                    +30 Days (1 Month)
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setFollowUpDate(addDaysISO(15))}
+                    className="h-6 px-2 text-[11px] font-semibold"
+                  >
+                    +15 Days
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setFollowUpDate(addDaysISO(7))}
+                    className="h-6 px-2 text-[11px] font-semibold"
+                  >
+                    +7 Days
+                  </Button>
                 </div>
-                <div>
-                  <Label className="text-[11px]">Time</Label>
-                  <Input
-                    type="time"
-                    className="mt-1 h-8 text-xs"
-                    value={followUpTime}
-                    onChange={(e) => setFollowUpTime(e.target.value)}
-                  />
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-[11px]">Follow-up Date *</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 h-8 text-xs"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px]">Time</Label>
+                    <Input
+                      type="time"
+                      className="mt-1 h-8 text-xs"
+                      value={followUpTime}
+                      onChange={(e) => setFollowUpTime(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+                  <span className="animate-pulse">🔔</span>
+                  <span>An <strong>audible chime alarm</strong> will ring and alert you when this callback time arrives.</span>
                 </div>
               </div>
             )}
