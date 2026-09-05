@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download, Inbox, Loader2, MessageCircle, Phone, Search, Upload, Users2, Eye,
-  Clock, Flame, PhoneCall, CheckCircle2, RefreshCw, Plus, UserPlus, UserCheck,
+  Clock, Flame, PhoneCall, CheckCircle2, RefreshCw, Plus, UserPlus, UserCheck, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
+import { QuickFollowUpDialog } from "@/components/crm/QuickFollowUpDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, getWhatsAppUrl, type Lead } from "@/lib/crm";
@@ -57,6 +58,7 @@ function LeadsPage() {
   const [busy, setBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [createLeadOpen, setCreateLeadOpen] = useState(false);
+  const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
 
   useEffect(() => {
     if (!sessionLoading && session && !session.isAdmin) navigate({ to: "/my-leads", replace: true });
@@ -595,11 +597,21 @@ function LeadsPage() {
                         </td>
                         <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                           <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-amber-600 hover:text-amber-500 hover:bg-amber-500/10"
+                              aria-label="Follow-up"
+                              title="Set Quick Follow-up"
+                              onClick={() => setFollowUpLead(l)}
+                            >
+                              <CalendarClock className="h-4 w-4" />
+                            </Button>
                             <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="Call">
                               <a href={`tel:${l.mobile}`}><Phone className="h-4 w-4" /></a>
                             </Button>
-                            <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="WhatsApp">
-                              <a href={getWhatsAppUrl(l.mobile)} target="_blank" rel="noreferrer">
+                            <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-emerald-600 hover:text-emerald-500 hover:bg-emerald-500/10" aria-label="WhatsApp">
+                              <a href={getWhatsAppUrl(l.mobile)} target="_blank" rel="noreferrer" title="WhatsApp Chat">
                                 <MessageCircle className="h-4 w-4" />
                               </a>
                             </Button>
@@ -649,6 +661,18 @@ function LeadsPage() {
         onOpenChange={setCreateLeadOpen}
         companyId={companyId}
         adminUserId={session?.userId ?? null}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ["all-leads"] });
+          qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+        }}
+      />
+
+      {/* Quick Follow-Up Modal */}
+      <QuickFollowUpDialog
+        lead={followUpLead}
+        employeeId={session?.userId || ""}
+        open={Boolean(followUpLead)}
+        onOpenChange={(o) => !o && setFollowUpLead(null)}
         onSuccess={() => {
           qc.invalidateQueries({ queryKey: ["all-leads"] });
           qc.invalidateQueries({ queryKey: ["all-leads-stats"] });

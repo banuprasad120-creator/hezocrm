@@ -34,6 +34,7 @@ import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
+import { QuickFollowUpDialog } from "@/components/crm/QuickFollowUpDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
@@ -70,6 +71,7 @@ function InterestedLeadsPage() {
   const [viewLead, setViewLead] = useState<Lead | null>(null);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [docsLead, setDocsLead] = useState<Lead | null>(null);
+  const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
@@ -583,6 +585,16 @@ function InterestedLeadsPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        className="h-8 text-xs font-semibold border-amber-500/30 text-amber-600 hover:bg-amber-500/10 gap-1"
+                        onClick={() => setFollowUpLead(lead)}
+                        title="Schedule callback reminder"
+                      >
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        <span>Follow-up</span>
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         className="h-8 text-xs font-semibold border-indigo-500/30 text-indigo-600 hover:bg-indigo-500/10 gap-1"
                         onClick={() => setDocsLead(lead)}
                       >
@@ -603,6 +615,15 @@ function InterestedLeadsPage() {
           </div>
         </div>
       )}
+
+      {/* Quick Follow-Up Modal */}
+      <QuickFollowUpDialog
+        lead={followUpLead}
+        employeeId={userId || ""}
+        open={Boolean(followUpLead)}
+        onOpenChange={(o) => !o && setFollowUpLead(null)}
+        onSuccess={() => refetch()}
+      />
 
       {/* Candidate Documents Modal */}
       <CandidateDocumentsDialog

@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Building2, CreditCard, FileCheck, Flame, History, MessageCircle, PhoneCall, ShieldCheck } from "lucide-react";
+import { Building2, CalendarClock, CreditCard, FileCheck, Flame, History, MessageCircle, PhoneCall, ShieldCheck } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
+import { QuickFollowUpDialog } from "@/components/crm/QuickFollowUpDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { getDocumentStats, parseInterestedData } from "@/lib/interested-lead";
@@ -36,7 +37,9 @@ export function AgentLeadSheet({
   onOpenChange: (v: boolean) => void;
   onUpdate?: (lead: Lead) => void;
 }) {
+  const qc = useQueryClient();
   const [docsOpen, setDocsOpen] = useState(false);
+  const [followUpOpen, setFollowUpOpen] = useState(false);
   const leadId = lead?.id ?? "";
   const interestedData = parseInterestedData(lead?.notes);
 
@@ -100,17 +103,26 @@ export function AgentLeadSheet({
             </div>
           </div>
           <div className="mt-3"><LeadStatusBadge status={lead.status} /></div>
-          <div className="mt-4 flex gap-2">
-            <Button asChild className="h-10 flex-1 gradient-brand text-white">
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button asChild className="h-10 flex-1 min-w-[100px] gradient-brand text-white">
               <a href={`tel:${lead.mobile}`}><PhoneCall className="mr-1.5 h-4 w-4" /> CALL</a>
             </Button>
+            <Button
+              variant="outline"
+              className="h-10 border-amber-500/30 text-amber-600 hover:bg-amber-500/10 gap-1.5 font-semibold text-xs"
+              onClick={() => setFollowUpOpen(true)}
+              title="Schedule Callback"
+            >
+              <CalendarClock className="h-4 w-4" />
+              <span>Follow-up</span>
+            </Button>
             <Button asChild variant="outline" className="h-10 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
-              <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer">
+              <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer" title="WhatsApp Chat">
                 <MessageCircle className="h-4 w-4" />
               </a>
             </Button>
             {onUpdate && (
-              <Button variant="outline" className="h-10" onClick={() => onUpdate(lead)}>UPDATE</Button>
+              <Button variant="outline" className="h-10 text-xs font-semibold" onClick={() => onUpdate(lead)}>UPDATE</Button>
             )}
           </div>
         </SheetHeader>
@@ -325,6 +337,17 @@ export function AgentLeadSheet({
         lead={lead}
         open={docsOpen}
         onOpenChange={setDocsOpen}
+      />
+
+      {/* Quick Follow-Up Modal */}
+      <QuickFollowUpDialog
+        lead={lead}
+        open={followUpOpen}
+        onOpenChange={setFollowUpOpen}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ["follow-ups", leadId] });
+          qc.invalidateQueries({ queryKey: ["call-history", leadId] });
+        }}
       />
     </Sheet>
   );

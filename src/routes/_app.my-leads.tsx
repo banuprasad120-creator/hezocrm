@@ -17,6 +17,7 @@ import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
 import { CreateInterestedCandidateDialog } from "@/components/crm/CreateInterestedCandidateDialog";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
+import { QuickFollowUpDialog } from "@/components/crm/QuickFollowUpDialog";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { DiaryDialog } from "@/components/crm/DiaryDialog";
 import { getDocumentStats, parseInterestedData } from "@/lib/interested-lead";
@@ -56,6 +57,7 @@ function MyLeads() {
   const [interestedLead, setInterestedLead] = useState<Lead | null>(null);
   const [docsLead, setDocsLead] = useState<Lead | null>(null);
   const [diaryLead, setDiaryLead] = useState<Lead | null>(null);
+  const [followUpLead, setFollowUpLead] = useState<Lead | null>(null);
   const [createInterestedOpen, setCreateInterestedOpen] = useState(false);
   const [createLeadOpen, setCreateLeadOpen] = useState(false);
   const [autoRefill, setAutoRefill] = useState(true);
@@ -445,6 +447,7 @@ function MyLeads() {
                 isBusy={isBusy}
                 onView={() => setViewLead(currentLead)}
                 onUpdate={() => setActive(currentLead)}
+                onFollowUp={() => setFollowUpLead(currentLead)}
                 onOutOfService={() => outOfServiceM.mutate(currentLead)}
                 onInterested={() => setInterestedLead(currentLead)}
                 onDiary={() => setDiaryLead(currentLead)}
@@ -562,6 +565,15 @@ function MyLeads() {
                                 Docs
                               </Button>
                             )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs font-semibold border-amber-500/30 text-amber-600 hover:bg-amber-500/10"
+                              onClick={() => setFollowUpLead(l)}
+                              title="Schedule Follow-up"
+                            >
+                              Follow-up
+                            </Button>
                             <Button asChild size="sm" variant="outline" className="h-7 text-xs font-semibold">
                               <a href={`tel:${l.mobile}`}>Call</a>
                             </Button>
@@ -743,6 +755,19 @@ function MyLeads() {
           qc.invalidateQueries({ queryKey: ["my-leads"] });
         }}
       />
+
+      {/* Quick Follow-Up Modal */}
+      <QuickFollowUpDialog
+        lead={followUpLead}
+        employeeId={userId || ""}
+        open={Boolean(followUpLead)}
+        onOpenChange={(o) => !o && setFollowUpLead(null)}
+        onSuccess={() => {
+          refetch();
+          qc.invalidateQueries({ queryKey: ["my-leads"] });
+          qc.invalidateQueries({ queryKey: ["today-follow-ups"] });
+        }}
+      />
     </>
   );
 }
@@ -753,6 +778,7 @@ function LeadCard({
   isBusy,
   onView,
   onUpdate,
+  onFollowUp,
   onOutOfService,
   onInterested,
   onDiary,
@@ -762,6 +788,7 @@ function LeadCard({
   isBusy: boolean;
   onView: () => void;
   onUpdate: () => void;
+  onFollowUp?: () => void;
   onOutOfService: () => void;
   onInterested: () => void;
   onDiary: () => void;
@@ -876,9 +903,20 @@ function LeadCard({
           <Button asChild size="sm" className="h-9 gap-1.5 bg-brand hover:bg-brand/90 text-white font-bold">
             <a href={`tel:${lead.mobile}`}><PhoneCall className="h-4 w-4" /> Call</a>
           </Button>
-          <Button asChild variant="outline" size="sm" className="h-9 gap-1.5">
-            <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer">
-              <MessageCircle className="h-4 w-4 text-success" /> WhatsApp
+          {onFollowUp && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1.5 border-amber-500/30 text-amber-600 hover:bg-amber-500/10 font-semibold"
+              onClick={onFollowUp}
+              title="Schedule Callback"
+            >
+              <CalendarClock className="h-4 w-4" /> Follow-up
+            </Button>
+          )}
+          <Button asChild variant="outline" size="sm" className="h-9 gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
+            <a href={getWhatsAppUrl(lead.mobile)} target="_blank" rel="noreferrer" title="WhatsApp Chat">
+              <MessageCircle className="h-4 w-4" /> WhatsApp
             </a>
           </Button>
         </div>
