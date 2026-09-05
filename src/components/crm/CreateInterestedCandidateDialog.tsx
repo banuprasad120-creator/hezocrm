@@ -499,7 +499,7 @@ export function CreateInterestedCandidateDialog({
                 </h4>
               </div>
               <span className="text-[11px] font-semibold text-brand">
-                {docStats.percent}% Collected
+                {docStats.progressPercent}% Collected
               </span>
             </div>
 
@@ -533,9 +533,9 @@ export function CreateInterestedCandidateDialog({
                       </button>
                       <div className="min-w-0">
                         <p className="font-semibold truncate">
-                          {doc.name} {doc.required && <span className="text-rose-500">*</span>}
+                          {doc.name} {doc.isMandatory && <span className="text-rose-500">*</span>}
                         </p>
-                        <p className="text-[10px] text-muted-foreground truncate">{doc.description}</p>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{doc.category}</p>
                       </div>
                     </div>
 
