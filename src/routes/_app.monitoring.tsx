@@ -77,65 +77,11 @@ function Monitoring() {
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
-  // 1. Fetch distinct folders and counts
-  const { data: folders = [] } = useQuery({
-    queryKey: ["monitor-folders", companyId],
-    enabled: Boolean(companyId) && isAdmin,
-    queryFn: async () => {
-      const { data, error } = await supabase.from("lead_folder_counts")
-        .select("folder_date, lead_count").eq("company_id", companyId!)
-        .order("folder_date", { ascending: false }).limit(60);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({ date: r.folder_date as string, count: Number(r.lead_count) }));
-    },
-  });
-
-  // 2. Fetch lead stats for the selected folder/date
-  const { data: leadStats = [], refetch: refetchLeads } = useQuery({
-    queryKey: ["monitor-lead-stats", companyId, date, allDates],
-    enabled: Boolean(companyId) && isAdmin,
-    refetchInterval: 12_000,
-    queryFn: async () => {
-      const out: Pick<Lead, "id" | "status" | "assigned_to" | "loan_type" | "folder_date">[] = [];
-      const size = 1000;
-      for (let from = 0; ; from += size) {
-        let query = supabase.from("leads").select("id, status, assigned_to, loan_type, folder_date")
-          .eq("company_id", companyId!);
-        if (!allDates) query = query.eq("folder_date", date);
-        const { data, error } = await query.order("id").range(from, from + size - 1);
-        if (error) throw error;
-        out.push(...((data ?? []) as typeof out));
-        if (!data || data.length < size) break;
-      }
-      return out;
-    },
-  });
-
-  // 3. Fetch recent leads matching filters
-  const { data: recent = [], refetch: refetchRecent } = useQuery({
-    queryKey: ["monitor-recent", companyId, date, allDates, agentFilter, statusFilter, typeFilter],
-    enabled: Boolean(companyId) && isAdmin,
-    refetchInterval: 12_000,
-    queryFn: async () => {
-      let query = supabase.from("leads").select("*").eq("company_id", companyId!);
-      if (!allDates) query = query.eq("folder_date", date);
-      if (agentFilter !== ALL) query = query.eq("assigned_to", agentFilter);
-      if (statusFilter !== ALL) query = query.eq("status", statusFilter as Lead["status"]);
-      if (typeFilter !== ALL) query = query.eq("loan_type", typeFilter);
-      const { data, error } = await query
-        .order("last_call_at", { ascending: false, nullsFirst: false })
-        .order("created_at", { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      return data as Lead[];
-    },
-  });
-
-  // 4. Fetch full call records for precise date-based calling calculation
+  // 1. Fetch full call records for precise date-based calling calculation
   const { data: calls = [], refetch: refetchCalls } = useQuery({
     queryKey: ["monitor-calls-history", companyId],
     enabled: Boolean(companyId) && isAdmin,
-    refetchInterval: 12_000,
+    refetchInterval: 10_000,
     queryFn: async () => {
       const out: {
         id: string;
@@ -160,17 +106,27 @@ function Monitoring() {
     },
   });
 
-  const handleManualRefresh = async () => {
-    setIsRefreshing(true);
-    await Promise.all([refetchLeads(), refetchRecent(), refetchCalls()]);
-    setTimeout(() => setIsRefreshing(false), 500);
-  };
-
-  // Calls filtered by date
+  // Calls filtered by selected date
   const dateCalls = useMemo(() => {
     if (allDates) return calls;
     return calls.filter((c) => c.called_at && c.called_at.slice(0, 10) === date);
   }, [calls, allDates, date]);
+
+  // Lead IDs called on this date
+  const calledLeadIdsOnDate = useMemo(() => {
+    return Array.from(new Set(dateCalls.map((c) => c.lead_id).filter(Boolean)));
+  }, [dateCalls]);
+
+  // Map of lead_id -> latest call on this date
+  const latestCallByLead = useMemo(() => {
+    const map = new Map<string, (typeof dateCalls)[0]>();
+    for (const c of dateCalls) {
+      if (!map.has(c.lead_id)) {
+        map.set(c.lead_id, c);
+      }
+    }
+    return map;
+  }, [dateCalls]);
 
   // Distinct active agents who made calls on this date
   const activeAgentIdsOnDate = useMemo(() => {
@@ -180,6 +136,79 @@ function Monitoring() {
     }
     return ids;
   }, [dateCalls]);
+
+  // 2. Fetch distinct folders and counts
+  const { data: folders = [] } = useQuery({
+    queryKey: ["monitor-folders", companyId],
+    enabled: Boolean(companyId) && isAdmin,
+    queryFn: async () => {
+      const { data, error } = await supabase.from("lead_folder_counts")
+        .select("folder_date, lead_count").eq("company_id", companyId!)
+        .order("folder_date", { ascending: false }).limit(60);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({ date: r.folder_date as string, count: Number(r.lead_count) }));
+    },
+  });
+
+  // 3. Fetch lead stats (includes leads in folder OR called on this date)
+  const { data: leadStats = [], refetch: refetchLeads } = useQuery({
+    queryKey: ["monitor-lead-stats", companyId, date, allDates, calledLeadIdsOnDate.length],
+    enabled: Boolean(companyId) && isAdmin,
+    refetchInterval: 10_000,
+    queryFn: async () => {
+      let query = supabase.from("leads").select("id, status, assigned_to, loan_type, folder_date, last_call_at")
+        .eq("company_id", companyId!);
+      if (!allDates) {
+        if (calledLeadIdsOnDate.length > 0) {
+          query = query.or(`folder_date.eq.${date},id.in.(${calledLeadIdsOnDate.slice(0, 400).join(",")})`);
+        } else {
+          query = query.eq("folder_date", date);
+        }
+      }
+      const { data, error } = await query.order("last_call_at", { ascending: false, nullsFirst: false }).limit(1000);
+      if (error) {
+        const { data: fb } = await supabase.from("leads").select("id, status, assigned_to, loan_type, folder_date, last_call_at").eq("company_id", companyId!).limit(1000);
+        return (fb ?? []) as Lead[];
+      }
+      return (data ?? []) as Lead[];
+    },
+  });
+
+  // 4. Fetch recent leads matching filters
+  const { data: recent = [], refetch: refetchRecent } = useQuery({
+    queryKey: ["monitor-recent", companyId, date, allDates, agentFilter, statusFilter, typeFilter, calledLeadIdsOnDate.length],
+    enabled: Boolean(companyId) && isAdmin,
+    refetchInterval: 10_000,
+    queryFn: async () => {
+      let query = supabase.from("leads").select("*").eq("company_id", companyId!);
+      if (!allDates) {
+        if (calledLeadIdsOnDate.length > 0) {
+          query = query.or(`folder_date.eq.${date},id.in.(${calledLeadIdsOnDate.slice(0, 400).join(",")})`);
+        } else {
+          query = query.eq("folder_date", date);
+        }
+      }
+      if (agentFilter !== ALL) query = query.eq("assigned_to", agentFilter);
+      if (statusFilter !== ALL) query = query.eq("status", statusFilter as Lead["status"]);
+      if (typeFilter !== ALL) query = query.eq("loan_type", typeFilter);
+
+      const { data, error } = await query
+        .order("last_call_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) {
+        const { data: fb } = await supabase.from("leads").select("*").eq("company_id", companyId!).limit(200);
+        return (fb ?? []) as Lead[];
+      }
+      return (data ?? []) as Lead[];
+    },
+  });
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await Promise.all([refetchLeads(), refetchRecent(), refetchCalls()]);
+    setTimeout(() => setIsRefreshing(false), 500);
+  };
 
   const filteredLeads = useMemo(() => leadStats.filter((l) =>
     (agentFilter === ALL || l.assigned_to === agentFilter) &&
@@ -629,10 +658,10 @@ function Monitoring() {
         <div className="border-b p-4 flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-extrabold text-foreground">
-              Leads on Folder ({filteredLeads.length})
+              Leads Active {allDates ? "Across All Dates" : `on ${date}`} ({filteredLeads.length})
             </h3>
             <p className="text-xs text-muted-foreground">
-              {filteredLeads.length > recent.length ? `Showing ${recent.length} most recent leads` : "All matching leads"}
+              {filteredLeads.length > recent.length ? `Showing ${recent.length} most active leads` : "All matching active leads"}
             </p>
           </div>
 
@@ -660,40 +689,68 @@ function Monitoring() {
                 <th className="px-4 py-3">Loan Type</th>
                 <th className="px-4 py-3">Assigned Agent</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Call Outcome</th>
                 <th className="px-4 py-3">Last Call Time</th>
                 <th className="px-4 py-3 text-right">Details</th>
               </tr>
             </thead>
             <tbody className="divide-y">
-              {recent.map((l) => (
-                <tr key={l.id} className="hover:bg-muted/30 transition-colors">
-                  <td className="px-4 py-3">
-                    <Link
-                      to="/lead/$leadId"
-                      params={{ leadId: l.id }}
-                      className="font-bold text-foreground hover:underline hover:text-brand"
-                    >
-                      {l.customer_name}
-                    </Link>
-                    {l.city && <span className="block text-[11px] text-muted-foreground">{l.city}</span>}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">{l.mobile}</td>
-                  <td className="px-4 py-3 font-extrabold text-foreground">{inr(Number(l.loan_amount))}</td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">{l.loan_type}</td>
-                  <td className="px-4 py-3 font-medium text-foreground">{agentName(l.assigned_to)}</td>
-                  <td className="px-4 py-3"><LeadStatusBadge status={l.status} /></td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs font-mono">
-                    {l.last_call_at ? formatDateTime(l.last_call_at) : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Button asChild size="sm" variant="ghost" className="h-7 text-xs font-semibold">
-                      <Link to="/lead/$leadId" params={{ leadId: l.id }}>
-                        <ArrowUpRight className="h-3.5 w-3.5 mr-1" /> View
+              {recent.map((l) => {
+                const callInfo = latestCallByLead.get(l.id);
+                return (
+                  <tr key={l.id} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3">
+                      <Link
+                        to="/lead/$leadId"
+                        params={{ leadId: l.id }}
+                        className="font-bold text-foreground hover:underline hover:text-brand"
+                      >
+                        {l.customer_name}
                       </Link>
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        {l.city && <span className="text-[11px] text-muted-foreground">{l.city}</span>}
+                        <span className="text-[10px] rounded bg-muted/70 px-1 text-muted-foreground font-mono">
+                          📁 {l.folder_date}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs font-semibold">{l.mobile}</td>
+                    <td className="px-4 py-3 font-extrabold text-foreground">{inr(Number(l.loan_amount))}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">{l.loan_type}</td>
+                    <td className="px-4 py-3 font-medium text-foreground">{agentName(l.assigned_to)}</td>
+                    <td className="px-4 py-3"><LeadStatusBadge status={l.status} /></td>
+                    <td className="px-4 py-3">
+                      {callInfo ? (
+                        <div className="text-xs">
+                          <span className={cn(
+                            "font-bold",
+                            callInfo.call_result === "Connected" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                          )}>
+                            {callInfo.call_result}
+                          </span>
+                          {callInfo.customer_response && (
+                            <span className="block text-[11px] text-muted-foreground">
+                              {callInfo.customer_response}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs font-mono">
+                      {l.last_call_at ? formatDateTime(l.last_call_at) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Button asChild size="sm" variant="ghost" className="h-7 text-xs font-semibold">
+                        <Link to="/lead/$leadId" params={{ leadId: l.id }}>
+                          <ArrowUpRight className="h-3.5 w-3.5 mr-1" /> View
+                        </Link>
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
