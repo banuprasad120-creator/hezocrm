@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Building2, CreditCard, Flame, Landmark, Loader2, Plus, Trash2,
   CalendarClock, User, Phone, MapPin, Briefcase,
-  ShieldCheck, Wallet, Sparkles, CheckCircle2,
+  ShieldCheck, Wallet, Sparkles, CheckCircle2, FileCheck, Paperclip,
+  CheckCircle, Clock, AlertCircle, FileText, UploadCloud, Eye, X, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -17,8 +18,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
-  CARD_ISSUERS, TOP_BANKS, getDefaultDocuments, serializeInterestedData,
-  type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
+  CARD_ISSUERS, TOP_BANKS, getDefaultDocuments, getDocumentStats, serializeInterestedData,
+  type CandidateDocument, type ExistingCreditCard, type ExistingLoan, type InterestedLeadData,
 } from "@/lib/interested-lead";
 import { LOAN_TYPES } from "@/lib/crm";
 import { createInterestedCandidateServerFn } from "@/lib/crm.functions";
@@ -74,6 +75,31 @@ export function CreateInterestedCandidateDialog({
   const [followUpDate, setFollowUpDate] = useState("");
   const [followUpTime, setFollowUpTime] = useState("");
 
+  // Documents state
+  const [documents, setDocuments] = useState<CandidateDocument[]>(() =>
+    getDefaultDocuments("Salaried", "Personal Loan", false)
+  );
+
+  // Auto-sync documents when employment / service / loans change if user hasn't heavily modified
+  useEffect(() => {
+    setDocuments((prev) => {
+      const defaults = getDefaultDocuments(employmentType, serviceRequired, hasExistingLoans);
+      // Preserve existing statuses if matching
+      return defaults.map((d) => {
+        const found = prev.find((p) => p.name.toLowerCase() === d.name.toLowerCase());
+        return found ? { ...d, status: found.status, fileUrl: found.fileUrl, fileName: found.fileName } : d;
+      });
+    });
+  }, [employmentType, serviceRequired, hasExistingLoans]);
+
+  const docStats = getDocumentStats(documents);
+
+  const toggleDocStatus = (docId: string, status: CandidateDocument["status"]) => {
+    setDocuments((prev) =>
+      prev.map((d) => (d.id === docId ? { ...d, status, rejectionReason: undefined } : d))
+    );
+  };
+
   const resetForm = () => {
     setCustomerName("");
     setMobile("");
@@ -89,6 +115,7 @@ export function CreateInterestedCandidateDialog({
     setLoans([{ bank: "HDFC Bank", loanType: "Personal Loan", amount: "", emi: "" }]);
     setHasCreditCards(false);
     setCreditCards([{ bank: "HDFC Bank", limit: "", outstanding: "" }]);
+    setDocuments(getDefaultDocuments("Salaried", "Personal Loan", false));
     setNotes("");
     setScheduleFollowUp(false);
     setFollowUpDate("");
@@ -151,11 +178,7 @@ export function CreateInterestedCandidateDialog({
           loans: hasExistingLoans ? loans : [],
           hasCreditCards,
           creditCards: hasCreditCards ? creditCards : [],
-          documents: getDefaultDocuments(
-            employmentType,
-            serviceRequired,
-            hasExistingLoans
-          ),
+          documents,
           notes: notes.trim() || null,
           scheduleFollowUp,
           followUpDate: followUpDate || null,
@@ -466,10 +489,79 @@ export function CreateInterestedCandidateDialog({
             )}
           </div>
 
-          {/* 4. Notes & Follow-up */}
+          {/* 4. Candidate Documents Checklist */}
+          <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileCheck className="h-4 w-4 text-brand" />
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  4. Required Loan Documents ({docStats.received}/{docStats.total})
+                </h4>
+              </div>
+              <span className="text-[11px] font-semibold text-brand">
+                {docStats.percent}% Collected
+              </span>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              Pre-configured for <strong>{employmentType}</strong> ({serviceRequired}). Click to toggle received status or collect documents now:
+            </p>
+
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {documents.map((doc) => {
+                const isReceived = doc.status === "received" || doc.status === "verified";
+                return (
+                  <div
+                    key={doc.id}
+                    className={`flex items-center justify-between p-2.5 rounded-lg border text-xs transition-colors ${
+                      isReceived
+                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400"
+                        : "bg-muted/40 border-border text-foreground"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleDocStatus(doc.id, isReceived ? "pending" : "received")}
+                        className={`h-5 w-5 rounded border grid place-items-center shrink-0 transition-all ${
+                          isReceived
+                            ? "bg-emerald-500 border-emerald-600 text-white"
+                            : "border-muted-foreground/40 hover:border-brand"
+                        }`}
+                      >
+                        {isReceived && <CheckCircle className="h-3.5 w-3.5" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="font-semibold truncate">
+                          {doc.name} {doc.required && <span className="text-rose-500">*</span>}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground truncate">{doc.description}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={isReceived ? "default" : "outline"}
+                        className={`h-6 text-[11px] px-2 ${
+                          isReceived ? "bg-emerald-600 hover:bg-emerald-700 text-white" : ""
+                        }`}
+                        onClick={() => toggleDocStatus(doc.id, isReceived ? "pending" : "received")}
+                      >
+                        {isReceived ? "Received ✓" : "Mark Received"}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 5. Notes & Follow-up */}
           <div className="rounded-xl border border-border bg-card p-4 space-y-3">
             <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              <CalendarClock className="h-3.5 w-3.5 text-brand" /> 4. Remarks & Follow-up
+              <CalendarClock className="h-3.5 w-3.5 text-brand" /> 5. Remarks & Follow-up
             </h4>
             <div>
               <Label className="text-xs">Customer Remarks / Discussion Notes</Label>
