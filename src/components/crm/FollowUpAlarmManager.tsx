@@ -46,9 +46,9 @@ export function FollowUpAlarmManager() {
   // Fetch today's pending follow-ups
   const today = todayISO();
   const { data: pendingFollowUps = [] } = useQuery({
-    queryKey: ["follow-up-alarms", userId],
+    queryKey: ["follow-up-alarms", userId, session?.companyId],
     enabled: Boolean(userId),
-    refetchInterval: 25000, // Recheck every 25 seconds
+    refetchInterval: 15000, // Recheck every 15 seconds for accurate alarm trigger
     queryFn: async () => {
       let query = supabase
         .from("follow_ups")
@@ -56,8 +56,9 @@ export function FollowUpAlarmManager() {
         .eq("is_done", false)
         .lte("follow_up_date", today);
 
-      if (!session?.isAdmin) {
-        query = query.eq("employee_id", userId!);
+      if (!session?.isAdmin && session?.companyId) {
+        // Match user's assignments or company follow-ups
+        query = query.or(`employee_id.eq.${userId},employee_id.is.null`);
       }
 
       const { data, error } = await query;

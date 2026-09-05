@@ -45,32 +45,36 @@ export function setSoundEnabled(enabled: boolean): void {
 }
 
 /**
- * Plays a pleasant 3-tone harmonic chime for follow-up callback reminders
+ * Plays a pleasant 4-tone harmonic chime for follow-up callback reminders
  */
 export function playFollowUpChime(): void {
   if (!isSoundEnabled()) return;
   const ctx = getAudioContext();
   if (!ctx) return;
 
+  if (ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+
   const now = ctx.currentTime;
-  const notes = [587.33, 739.99, 880.0, 1174.66]; // D5, F#5, A5, D6 harmonic major chime
+  const notes = [587.33, 739.99, 880.0, 1174.66, 1479.98]; // D5, F#5, A5, D6, F#6 bell chime
 
   notes.forEach((freq, idx) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
     osc.type = "sine";
-    osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+    osc.frequency.setValueAtTime(freq, now + idx * 0.1);
 
-    gain.gain.setValueAtTime(0.001, now + idx * 0.12);
-    gain.gain.exponentialRampToValueAtTime(0.25, now + idx * 0.12 + 0.04);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.6);
+    gain.gain.setValueAtTime(0.001, now + idx * 0.1);
+    gain.gain.exponentialRampToValueAtTime(0.45, now + idx * 0.1 + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.1 + 0.75);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
 
-    osc.start(now + idx * 0.12);
-    osc.stop(now + idx * 0.12 + 0.65);
+    osc.start(now + idx * 0.1);
+    osc.stop(now + idx * 0.1 + 0.8);
   });
 }
 

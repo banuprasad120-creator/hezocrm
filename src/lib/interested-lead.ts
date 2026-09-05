@@ -348,7 +348,23 @@ export function getDocumentStats(documents?: CandidateDocument[]): DocumentStats
   };
 }
 
-/** Generates personalized WhatsApp message listing required documents */
+/** Formats raw phone number to valid international WhatsApp format with country code 91 */
+export function formatWhatsAppPhone(rawPhone?: string | null): string {
+  if (!rawPhone) return "";
+  let digits = rawPhone.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `91${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("0")) {
+    return `91${digits.slice(1)}`;
+  }
+  if (digits.length === 12 && digits.startsWith("91")) {
+    return digits;
+  }
+  return digits;
+}
+
+/** 1. Document Request Checklist WhatsApp Template */
 export function generateWhatsAppDocumentRequestMessage(
   customerName: string,
   serviceRequired: string,
@@ -360,24 +376,76 @@ export function generateWhatsAppDocumentRequestMessage(
 
   let msg = `Dear *${customerName.trim()}*,\n\n`;
   msg += `Greetings from Hezo Financial Advisory!\n\n`;
-  msg += `Thank you for your interest in our *${serviceRequired || "Loan"}* services. To fast-track your profile evaluation and bank sanction, please share clear copies/PDFs of the following documents:\n\n`;
+  msg += `Thank you for choosing us for your *${serviceRequired || "Loan"}* requirement. To proceed with your profile verification and fast-track bank approval, please share clear copies of the following documents:\n\n`;
   msg += `📑 *REQUIRED DOCUMENTS CHECKLIST:*\n`;
 
   listToRequest.forEach((doc, idx) => {
-    const isMandatory = doc.isMandatory ? " [Mandatory]" : "";
-    const isRejected = doc.status === "rejected" ? ` ⚠️ (Resubmission: ${doc.rejectionReason || "Please provide clear copy"})` : "";
+    const isMandatory = doc.isMandatory ? " [Required]" : "";
+    const isRejected = doc.status === "rejected" ? ` ⚠️ (Resubmit: ${doc.rejectionReason || "Please send clear copy"})` : "";
     msg += `${idx + 1}. *${doc.name}*${isMandatory}${isRejected}\n`;
   });
 
-  msg += `\n📌 *Submission Guidelines:*\n`;
-  msg += `• Photos must show all 4 corners clearly with no glare/blur.\n`;
-  msg += `• For Bank Statements, please share the official downloaded e-PDF from Netbanking.\n`;
-  msg += `• You can send the files directly as attachments on this WhatsApp chat.\n\n`;
+  msg += `\n📌 *Submission Instructions:*\n`;
+  msg += `• Share clear PDF or photo copies with all corners visible.\n`;
+  msg += `• You can reply and attach files directly to this chat.\n\n`;
   msg += `Warm regards,\n`;
   if (agentName) {
     msg += `*${agentName}*\n`;
   }
-  msg += `Loan Advisory & Processing Team`;
+  msg += `Loan Advisory Team`;
+
+  return msg;
+}
+
+/** 2. Follow-up Callback Reminder WhatsApp Template */
+export function generateWhatsAppFollowUpReminderMessage(
+  customerName: string,
+  serviceRequired: string,
+  followUpDate?: string | null,
+  followUpTime?: string | null,
+  agentName?: string
+): string {
+  let msg = `Dear *${customerName.trim()}*,\n\n`;
+  msg += `Greetings from Hezo Financial Advisory!\n\n`;
+  msg += `This is a gentle reminder regarding our scheduled discussion for your *${serviceRequired || "Loan"}* inquiry.\n\n`;
+  
+  if (followUpDate) {
+    msg += `📅 *Scheduled Callback:* ${followUpDate}${followUpTime ? ` at ${followUpTime.slice(0, 5)}` : ""}\n\n`;
+  }
+  msg += `Our loan advisor will connect with you at the scheduled time to assist with your best loan rates, eligibility, and quick sanction.\n\n`;
+  msg += `If you would like to reschedule or discuss right away, please reply to this message.\n\n`;
+  msg += `Warm regards,\n`;
+  if (agentName) {
+    msg += `*${agentName}*\n`;
+  }
+  msg += `Loan Advisory Team`;
+
+  return msg;
+}
+
+/** 3. Loan Offer & Welcome WhatsApp Template */
+export function generateWhatsAppLoanOfferMessage(
+  customerName: string,
+  serviceRequired: string,
+  loanAmount?: string | number | null,
+  agentName?: string
+): string {
+  let msg = `Dear *${customerName.trim()}*,\n\n`;
+  msg += `Great news from Hezo Financial Advisory! 🎉\n\n`;
+  msg += `Your inquiry for *${serviceRequired || "Personal Loan"}* has been pre-screened with top lending partners.\n\n`;
+  
+  if (loanAmount) {
+    const formatted = typeof loanAmount === "number" ? Number(loanAmount).toLocaleString("en-IN") : loanAmount;
+    msg += `💰 *Eligible Loan Amount:* Up to ₹${formatted}\n`;
+    msg += `⚡ *Fast Disbursal:* 24 to 48 hours\n`;
+    msg += `📉 *Attractive Interest Rates & Flexible EMI Tenure*\n\n`;
+  }
+  msg += `Please reply *YES* or send your documents on this chat to initiate instant processing.\n\n`;
+  msg += `Warm regards,\n`;
+  if (agentName) {
+    msg += `*${agentName}*\n`;
+  }
+  msg += `Loan Advisory Team`;
 
   return msg;
 }

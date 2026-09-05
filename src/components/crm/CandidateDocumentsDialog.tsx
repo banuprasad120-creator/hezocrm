@@ -59,7 +59,10 @@ import {
   DocumentStatus,
   getDefaultDocuments,
   getDocumentStats,
+  formatWhatsAppPhone,
   generateWhatsAppDocumentRequestMessage,
+  generateWhatsAppFollowUpReminderMessage,
+  generateWhatsAppLoanOfferMessage,
   parseInterestedData,
 } from "@/lib/interested-lead";
 import { inr, type Lead } from "@/lib/crm";
@@ -340,28 +343,55 @@ export function CandidateDocumentsDialog({
     toast.info("Checklist reset to standard requirements.");
   };
 
-  // WhatsApp helper
-  const waMessage = useMemo(() => {
+  const [waTab, setWaTab] = useState<"docs" | "followup" | "offer">("docs");
+
+  // Dynamic 3 WhatsApp messages
+  const currentWaMessage = useMemo(() => {
     if (!lead) return "";
+    if (waTab === "followup") {
+      return generateWhatsAppFollowUpReminderMessage(
+        lead.customer_name,
+        parsedLeadData?.serviceRequired || lead.loan_type || "Loan",
+        parsedLeadData?.notes?.match(/\d{4}-\d{2}-\d{2}/)?.[0] || "Today",
+        parsedLeadData?.notes?.match(/\d{2}:\d{2}/)?.[0] || null,
+        agentName
+      );
+    }
+    if (waTab === "offer") {
+      return generateWhatsAppLoanOfferMessage(
+        lead.customer_name,
+        parsedLeadData?.serviceRequired || lead.loan_type || "Loan",
+        lead.loan_amount || parsedLeadData?.requiredAmount || null,
+        agentName
+      );
+    }
     return generateWhatsAppDocumentRequestMessage(
       lead.customer_name,
       parsedLeadData?.serviceRequired || lead.loan_type || "Loan",
       documents,
       agentName
     );
-  }, [lead, parsedLeadData, documents, agentName]);
+  }, [lead, parsedLeadData, documents, agentName, waTab]);
 
-  const sendWhatsApp = () => {
+  const sendWhatsApp = (openWeb: boolean = false) => {
     if (!lead) return;
-    const cleanMobile = lead.mobile.replace(/\D/g, "");
-    const encoded = encodeURIComponent(waMessage);
-    window.open(`https://wa.me/${cleanMobile}?text=${encoded}`, "_blank");
-    toast.success("Opening WhatsApp with document checklist!");
+    const phone = formatWhatsAppPhone(lead.mobile);
+    if (!phone) {
+      toast.error("Candidate mobile number is missing or invalid");
+      return;
+    }
+    const encoded = encodeURIComponent(currentWaMessage);
+    const url = openWeb
+      ? `https://web.whatsapp.com/send?phone=${phone}&text=${encoded}`
+      : `https://api.whatsapp.com/send?phone=${phone}&text=${encoded}`;
+
+    window.open(url, "_blank");
+    toast.success("Opening WhatsApp chat with pre-filled message!");
   };
 
   const copyWhatsAppText = () => {
-    navigator.clipboard.writeText(waMessage);
-    toast.success("Copied WhatsApp document request to clipboard!");
+    navigator.clipboard.writeText(currentWaMessage);
+    toast.success("Copied WhatsApp message text to clipboard!");
   };
 
   // Download single document file
@@ -1023,37 +1053,85 @@ export function CandidateDocumentsDialog({
 
       {/* WhatsApp Message Preview Modal */}
       <Dialog open={waPreviewOpen} onOpenChange={setWaPreviewOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-emerald-600">
-              <MessageSquare className="h-5 w-5" /> WhatsApp Document Request Message
+              <MessageSquare className="h-5 w-5" /> WhatsApp Message Generator
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Review or customize the document checklist message before sending to {lead.customer_name} ({lead.mobile}).
+              Select from 3 personalized templates to send directly to <strong>{lead.customer_name}</strong> ({lead.mobile}):
             </DialogDescription>
           </DialogHeader>
+
+          {/* 3 WhatsApp Templates Tabs */}
+          <div className="flex items-center gap-1.5 p-1 bg-muted/60 rounded-xl border">
+            <button
+              type="button"
+              onClick={() => setWaTab("docs")}
+              className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all ${
+                waTab === "docs"
+                  ? "bg-background text-emerald-600 shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              📑 1. Document Checklist
+            </button>
+            <button
+              type="button"
+              onClick={() => setWaTab("followup")}
+              className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all ${
+                waTab === "followup"
+                  ? "bg-background text-emerald-600 shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              🔔 2. Follow-up Reminder
+            </button>
+            <button
+              type="button"
+              onClick={() => setWaTab("offer")}
+              className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all ${
+                waTab === "offer"
+                  ? "bg-background text-emerald-600 shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              💰 3. Loan Offer / Sanction
+            </button>
+          </div>
+
           <div className="py-2">
-            <div className="rounded-xl border bg-muted/30 p-3.5 font-mono text-xs whitespace-pre-wrap max-h-[300px] overflow-y-auto leading-relaxed">
-              {waMessage}
+            <div className="rounded-xl border bg-muted/30 p-3.5 font-mono text-xs whitespace-pre-wrap max-h-[260px] overflow-y-auto leading-relaxed text-foreground">
+              {currentWaMessage}
             </div>
           </div>
-          <DialogFooter className="flex flex-row items-center justify-between gap-2">
-            <Button variant="outline" size="sm" onClick={copyWhatsAppText} className="h-9 gap-1 text-xs">
-              <Copy className="h-3.5 w-3.5" /> Copy Text
+
+          <DialogFooter className="flex flex-col sm:flex-row items-center justify-between gap-2 border-t pt-3">
+            <Button variant="outline" size="sm" onClick={copyWhatsAppText} className="h-9 gap-1 text-xs w-full sm:w-auto">
+              <Copy className="h-3.5 w-3.5" /> Copy Message Text
             </Button>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setWaPreviewOpen(false)} className="h-9">
-                Close
+
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  sendWhatsApp(true);
+                  setWaPreviewOpen(false);
+                }}
+                className="h-9 text-xs gap-1 border-emerald-500/30 text-emerald-700 hover:bg-emerald-500/10"
+              >
+                💻 WhatsApp Web
               </Button>
               <Button
                 size="sm"
                 onClick={() => {
-                  sendWhatsApp();
+                  sendWhatsApp(false);
                   setWaPreviewOpen(false);
                 }}
                 className="h-9 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
               >
-                <Send className="h-3.5 w-3.5" /> Send on WhatsApp
+                <Send className="h-3.5 w-3.5" /> Send WhatsApp
               </Button>
             </div>
           </DialogFooter>
