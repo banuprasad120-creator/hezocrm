@@ -67,39 +67,50 @@ export function FollowUpAlarmManager() {
     },
   });
 
-  // Alarm checker loop
-  useEffect(() => {
-    if (!pendingFollowUps || pendingFollowUps.length === 0) return;
+function isFollowUpDueRightNow(itemDate: string, itemTime: string | null): boolean {
+  if (!itemTime) return false; // At that scheduled time only
 
-    const now = new Date();
-    const currentHours = String(now.getHours()).padStart(2, "0");
-    const currentMinutes = String(now.getMinutes()).padStart(2, "0");
-    const currentTimeStr = `${currentHours}:${currentMinutes}`;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const todayLocal = `${year}-${month}-${day}`;
 
-    for (const item of pendingFollowUps) {
-      if (alertedIdsRef.current.has(item.id)) continue;
+  // Parse itemDate to local YYYY-MM-DD
+  let itemDateLocal = itemDate;
+  if (itemDate.includes("T")) {
+    const d = new Date(itemDate);
+    const itemYear = d.getFullYear();
+    const itemMonth = String(d.getMonth() + 1).padStart(2, "0");
+    const itemDay = String(d.getDate()).padStart(2, "0");
+    itemDateLocal = `${itemYear}-${itemMonth}-${itemDay}`;
+  }
 
-      const isToday = item.follow_up_date === today;
-      const isOverdueDay = item.follow_up_date < today;
+  // Must match today's date
+  if (itemDateLocal !== todayLocal) return false;
 
-      let isDueNow = false;
+  const [targetH, targetM] = itemTime.slice(0, 5).split(":").map(Number);
+  if (isNaN(targetH) || isNaN(targetM)) return false;
 
-      if (isOverdueDay) {
-        // Overdue from previous day
-        isDueNow = true;
-      } else if (isToday) {
-        if (!item.follow_up_time) {
-          // Scheduled for today with no specific time, alert once on login / day start
-          isDueNow = true;
-        } else {
-          // Scheduled with specific time (e.g. "14:30")
-          const targetTime = item.follow_up_time.slice(0, 5);
-          // Due if target time matches current minute or was scheduled earlier today
-          if (targetTime <= currentTimeStr) {
-            isDueNow = true;
-          }
-        }
-      }
+  const currentH = now.getHours();
+  const currentM = now.getMinutes();
+
+  const currentTotalMinutes = currentH * 60 + currentM;
+  const targetTotalMinutes = targetH * 60 + targetM;
+
+  // Due strictly when current clock reaches the exact scheduled minute (within 0 to 1 min window)
+  const diff = currentTotalMinutes - targetTotalMinutes;
+  return diff >= 0 && diff <= 1;
+}
+
+// Alarm checker loop - fires alarm strictly at the scheduled callback minute
+useEffect(() => {
+  if (!pendingFollowUps || pendingFollowUps.length === 0) return;
+
+  for (const item of pendingFollowUps) {
+    if (alertedIdsRef.current.has(item.id)) continue;
+
+    const isDueNow = isFollowUpDueRightNow(item.follow_up_date, item.follow_up_time);
 
       if (isDueNow) {
         alertedIdsRef.current.add(item.id);
