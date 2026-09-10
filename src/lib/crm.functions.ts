@@ -696,5 +696,186 @@ export const updateInterestedCandidateDocumentsServerFn = createServerFn({
     return { success: true, stats };
   });
 
+const updateInterestedCandidateSchema = z.object({
+  leadId: z.string(),
+  serviceRequired: z.string().default("Personal Loan"),
+  requiredAmount: z.string().optional().nullable(),
+  employmentType: z.string().default("Salaried"),
+  salaryBank: z.string().optional().nullable(),
+  bankAccounts: z.array(z.string()).optional(),
+  cibilScore: z.string().optional().nullable(),
+  monthlyIncome: z.string().optional().nullable(),
+  employer: z.string().optional().nullable(),
+  serviceYears: z.string().optional().nullable(),
+  hasExistingLoans: z.boolean().default(false),
+  loans: z
+    .array(
+      z.object({
+        bank: z.string(),
+        loanType: z.string(),
+        amount: z.string().optional(),
+        emi: z.string().optional(),
+      })
+    )
+    .default([]),
+  hasCreditCards: z.boolean().default(false),
+  creditCards: z
+    .array(
+      z.object({
+        bank: z.string(),
+        limit: z.string().optional(),
+        outstanding: z.string().optional(),
+      })
+    )
+    .default([]),
+  documents: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        category: z.enum([
+          "identity",
+          "address",
+          "income",
+          "banking",
+          "employment",
+          "business",
+          "loans",
+          "property",
+          "other",
+        ]),
+        status: z.enum(["pending", "requested", "received", "verified", "rejected"]),
+        isMandatory: z.boolean().optional(),
+        fileUrl: z.string().optional(),
+        fileName: z.string().optional(),
+        fileSize: z.number().optional(),
+        fileType: z.string().optional(),
+        uploadedAt: z.string().optional(),
+        verifiedAt: z.string().optional(),
+        verifiedBy: z.string().optional(),
+        rejectionReason: z.string().optional(),
+        notes: z.string().optional(),
+      })
+    )
+    .optional(),
+  notes: z.string().optional().nullable(),
+  scheduleFollowUp: z.boolean().default(false),
+  followUpDate: z.string().optional().nullable(),
+  followUpTime: z.string().optional().nullable(),
+});
+
+/** Securely updates candidate details, banking profile, requirements, and logs history */
+export const updateInterestedCandidateServerFn = createServerFn({
+  method: "POST",
+})
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    updateInterestedCandidateSchema.parse(input)
+  )
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { serializeInterestedData, parseInterestedData } = await import("@/lib/interested-lead");
+    const userId = context.userId;
+
+    const { data: userProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("company_id, full_name, email")
+      .eq("id", userId)
+      .maybeSingle();
+    const companyId = userProfile?.company_id;
+    if (!companyId) throw new Error("User is not associated with any company");
+
+    const { data: lead, error: fetchErr } = await supabaseAdmin
+      .from("leads")
+      .select("*")
+      .eq("id", data.leadId)
+      .single();
+
+    if (fetchErr || !lead) throw new Error("Lead not found");
+    if (lead.company_id !== companyId) throw new Error("Unauthorized lead access");
+
+    const existingData = parseInterestedData(lead.notes);
+
+    const interestedData = {
+      serviceRequired: data.serviceRequired,
+      requiredAmount: data.requiredAmount || undefined,
+      employmentType: data.employmentType,
+      salaryBank:
+        data.employmentType === "Salaried"
+          ? data.salaryBank || undefined
+          : undefined,
+      bankAccounts: data.bankAccounts && data.bankAccounts.length > 0 ? data.bankAccounts : undefined,
+      cibilScore: data.cibilScore?.trim() || undefined,
+      monthlyIncome: data.monthlyIncome || undefined,
+      employer: data.employer?.trim() || undefined,
+      serviceYears: data.serviceYears?.trim() || undefined,
+      hasExistingLoans: data.hasExistingLoans,
+      loansCount: data.hasExistingLoans ? data.loans.length : 0,
+      loans: data.hasExistingLoans ? data.loans : [],
+      hasCreditCards: data.hasCreditCards,
+      cardsCount: data.hasCreditCards ? data.creditCards.length : 0,
+      creditCards: data.hasCreditCards ? data.creditCards : [],
+      documents: data.documents && data.documents.length > 0 ? data.documents : existingData?.documents,
+      notes: data.notes?.trim() || undefined,
+    };
+
+    const serializedNotes = serializeInterestedData(
+      interestedData,
+      data.notes || undefined
+    );
+    const parsedReqAmount =
+      Number((data.requiredAmount || "").replace(/\D/g, "")) || Number(lead.loan_amount) || 0;
+    const parsedIncome =
+      Number((data.monthlyIncome || "").replace(/\D/g, "")) || Number(lead.monthly_income) || null;
+
+    const nowISO = new Date().toISOString();
+
+    const { error: updateErr } = await supabaseAdmin
+      .from("leads")
+      .update({
+        status: "Interested",
+        loan_type: data.serviceRequired || lead.loan_type,
+        loan_amount: parsedReqAmount,
+        employment_type: data.employmentType || lead.employment_type,
+        monthly_income: parsedIncome,
+        employer: data.employer?.trim() || lead.employer,
+        notes: serializedNotes,
+        last_call_at: nowISO,
+        updated_at: nowISO,
+      })
+      .eq("id", data.leadId);
+
+    if (updateErr) throw new Error(updateErr.message);
+
+    // Call history
+    const agentName = userProfile?.full_name || userProfile?.email || "Agent";
+    await supabaseAdmin.from("call_history").insert({
+      lead_id: lead.id,
+      company_id: companyId,
+      employee_id: userId,
+      call_result: "Connected",
+      customer_response: "Interested",
+      status: "Interested",
+      notes: `Updated candidate profile: ${data.serviceRequired} (₹${parsedReqAmount}). CIBIL: ${data.cibilScore || "N/A"}. Salary Bank: ${data.employmentType === "Salaried" ? data.salaryBank : "N/A"}. ${data.hasExistingLoans ? `${data.loans.length} loans` : "No loans"}, ${data.hasCreditCards ? `${data.creditCards.length} cards` : "No cards"}. By ${agentName}. ${data.notes || ""}`,
+      called_at: nowISO,
+    });
+
+    // Follow-up
+    if (data.scheduleFollowUp && data.followUpDate) {
+      await supabaseAdmin.from("follow_ups").insert({
+        lead_id: lead.id,
+        company_id: companyId,
+        employee_id: userId,
+        follow_up_date: data.followUpDate,
+        follow_up_time: data.followUpTime || null,
+        note: `Interested candidate callback: ${data.serviceRequired} for ₹${parsedReqAmount.toLocaleString("en-IN")}`,
+        is_done: false,
+      });
+    }
+
+    return { success: true };
+  });
+
+
 
 

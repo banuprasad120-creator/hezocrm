@@ -23,6 +23,7 @@ import {
 } from "@/lib/interested-lead";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { LOAN_TYPES, addDaysISO, type Lead } from "@/lib/crm";
+import { updateInterestedCandidateServerFn } from "@/lib/crm.functions";
 import { FileCheck, Paperclip, ExternalLink, Download } from "lucide-react";
 
 interface InterestedLeadDialogProps {
@@ -173,77 +174,41 @@ export function InterestedLeadDialog({
   const handleSave = async () => {
     if (!lead) return;
     setBusy(true);
-
     try {
-      const interestedData: InterestedLeadData = {
-        serviceRequired,
-        requiredAmount: requiredAmount || undefined,
-        employmentType: employmentType || undefined,
-        salaryBank: employmentType === "Salaried" ? salaryBank : undefined,
-        bankAccounts: bankAccounts.length > 0 ? bankAccounts : undefined,
-        cibilScore: cibilScore.trim() || undefined,
-        monthlyIncome: monthlyIncome || undefined,
-        employer: employer || undefined,
-        serviceYears: serviceYears.trim() || undefined,
-        hasExistingLoans,
-        loansCount: hasExistingLoans ? loans.length : 0,
-        loans: hasExistingLoans ? loans : [],
-        hasCreditCards,
-        cardsCount: hasCreditCards ? creditCards.length : 0,
-        creditCards: hasCreditCards ? creditCards : [],
-        documents: documents && documents.length > 0 ? documents : undefined,
-        notes: notes.trim() || undefined,
-      };
-
-      const serializedNotes = serializeInterestedData(interestedData, notes);
-      const now = new Date().toISOString();
-
-      // 1. Update the lead
-      const parsedReqAmount = Number(requiredAmount.replace(/\D/g, "")) || Number(lead.loan_amount) || 0;
-      const parsedIncome = Number(monthlyIncome.replace(/\D/g, "")) || lead.monthly_income || null;
-
-      const { error: leadErr } = await supabase.from("leads").update({
-        status: "Interested",
-        loan_type: serviceRequired || lead.loan_type,
-        loan_amount: parsedReqAmount,
-        employment_type: employmentType || lead.employment_type,
-        monthly_income: parsedIncome,
-        employer: employer || lead.employer,
-        notes: serializedNotes,
-        last_call_at: now,
-      }).eq("id", lead.id);
-
-      if (leadErr) throw leadErr;
-
-      // 2. Log in call_history
-      const { error: callErr } = await supabase.from("call_history").insert({
-        lead_id: lead.id,
-        company_id: lead.company_id,
-        employee_id: employeeId,
-        call_result: "Connected",
-        customer_response: "Interested",
-        status: "Interested",
-        notes: `Customer accepted: ${serviceRequired} (₹${parsedReqAmount}). CIBIL: ${cibilScore || "N/A"}. Salary Bank: ${employmentType === "Salaried" ? salaryBank : "N/A"}. ${hasExistingLoans ? `${loans.length} loans` : "No loans"}, ${hasCreditCards ? `${creditCards.length} cards` : "No cards"}. Service Exp: ${serviceYears || "N/A"} yrs. ${notes || ""}`,
+      await updateInterestedCandidateServerFn({
+        data: {
+          leadId: lead.id,
+          serviceRequired,
+          requiredAmount: requiredAmount || null,
+          employmentType,
+          salaryBank: employmentType === "Salaried" ? salaryBank : null,
+          bankAccounts,
+          cibilScore: cibilScore.trim() || null,
+          monthlyIncome: monthlyIncome || null,
+          employer: employer.trim() || null,
+          serviceYears: serviceYears.trim() || null,
+          hasExistingLoans,
+          loans: hasExistingLoans ? loans : [],
+          hasCreditCards,
+          creditCards: hasCreditCards ? creditCards : [],
+          documents,
+          notes: notes.trim() || null,
+          scheduleFollowUp,
+          followUpDate: followUpDate || null,
+          followUpTime: followUpTime || null,
+        },
       });
-      if (callErr) console.warn("Call history note error:", callErr);
-
-      // 3. Optional Follow-up
-      if (scheduleFollowUp && followUpDate) {
-        await supabase.from("follow_ups").insert({
-          lead_id: lead.id,
-          company_id: lead.company_id,
-          employee_id: employeeId,
-          follow_up_date: followUpDate,
-          follow_up_time: followUpTime || null,
-          note: `Interested lead follow-up: ${serviceRequired} for ₹${parsedReqAmount.toLocaleString("en-IN")}`,
-        });
-      }
 
       toast.success("🎉 Customer Accepted Service! Lead saved to Interested.", {
         description: `Logged CIBIL (${cibilScore || "—"}), ${employmentType}, ${hasExistingLoans ? `${loans.length} loan(s)` : "no loans"}, ${hasCreditCards ? `${creditCards.length} card(s)` : "no cards"}.`,
       });
 
-      await qc.invalidateQueries();
+      await qc.invalidateQueries({ queryKey: ["interested-leads"] });
+      await qc.invalidateQueries({ queryKey: ["my-leads"] });
+      await qc.invalidateQueries({ queryKey: ["leads"] });
+      await qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      await qc.invalidateQueries({ queryKey: ["call-history", lead.id] });
+
       onOpenChange(false);
       onSuccess?.();
     } catch (err) {

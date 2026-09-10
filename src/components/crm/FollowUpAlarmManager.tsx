@@ -33,8 +33,31 @@ export function FollowUpAlarmManager() {
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  // Track follow-up IDs that have already alerted during this session to avoid continuous loop
+  const getTodayStorageKey = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    return `hezo_alerted_followups_${year}-${month}-${day}`;
+  };
+
+  // Track follow-up IDs that have already alerted today to avoid continuous loop or refresh rings
   const alertedIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = sessionStorage.getItem(getTodayStorageKey());
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            alertedIdsRef.current = new Set(parsed);
+          }
+        }
+      } catch {}
+    }
+  }, []);
+
   const [activeAlarm, setActiveAlarm] = useState<FollowUpAlarmItem | null>(null);
 
   // Ask for notification permission once (strictly only for calling agents)
@@ -68,7 +91,7 @@ export function FollowUpAlarmManager() {
   });
 
 function isFollowUpDueRightNow(itemDate: string, itemTime: string | null): boolean {
-  if (!itemTime) return false; // At that scheduled time only
+  if (!itemTime) return false; // At that scheduled callback time only
 
   const now = new Date();
   const year = now.getFullYear();
@@ -98,9 +121,9 @@ function isFollowUpDueRightNow(itemDate: string, itemTime: string | null): boole
   const currentTotalMinutes = currentH * 60 + currentM;
   const targetTotalMinutes = targetH * 60 + targetM;
 
-  // Due strictly when current clock reaches the exact scheduled minute (within 0 to 1 min window)
+  // Due strictly when clock reaches the scheduled minute (diff === 0)
   const diff = currentTotalMinutes - targetTotalMinutes;
-  return diff >= 0 && diff <= 1;
+  return diff === 0;
 }
 
 // Alarm checker loop - fires alarm strictly at the scheduled callback minute
@@ -114,8 +137,14 @@ useEffect(() => {
 
       if (isDueNow) {
         alertedIdsRef.current.add(item.id);
+        try {
+          sessionStorage.setItem(
+            getTodayStorageKey(),
+            JSON.stringify(Array.from(alertedIdsRef.current))
+          );
+        } catch {}
 
-        // Play alarm chime
+        // Play alarm chime strictly at scheduled time
         playFollowUpChime();
 
         // Set active alarm banner

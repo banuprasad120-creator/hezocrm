@@ -76,15 +76,21 @@ function InterestedLeadsPage() {
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
-  // Fetch all leads with status "Interested"
+  // Fetch all leads with status "Interested" and active candidate pipeline statuses
   const { data: rawLeads = [], isLoading, refetch } = useQuery({
     queryKey: ["interested-leads", companyId, userId, isAdmin],
     enabled: Boolean(companyId || userId),
     queryFn: async () => {
-      let query = supabase.from("leads").select("*").eq("status", "Interested");
+      let query = supabase
+        .from("leads")
+        .select("*")
+        .in("status", ["Interested", "Documents Pending", "Documents Received", "Application Submitted", "Processing", "Approved"]);
       if (companyId) query = query.eq("company_id", companyId);
       if (!isAdmin && userId) query = query.eq("assigned_to", userId);
-      query = query.order("last_call_at", { ascending: false });
+      query = query
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("last_call_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false });
 
       const { data, error } = await query;
       if (error) throw error;
@@ -101,18 +107,24 @@ function InterestedLeadsPage() {
     return map;
   }, [agents]);
 
-  // Enrich leads with parsed questionnaire & documents data
+  // Enrich leads with parsed questionnaire & documents data and sort latest updated first
   const enrichedLeads = useMemo(() => {
-    return rawLeads.map((lead) => {
-      const parsed = parseInterestedData(lead.notes);
-      const docStats = getDocumentStats(parsed?.documents);
-      return {
-        ...lead,
-        interestedData: parsed,
-        docStats,
-        agentName: lead.assigned_to ? agentMap.get(lead.assigned_to) || "Assigned Agent" : "Unassigned",
-      };
-    });
+    return rawLeads
+      .map((lead) => {
+        const parsed = parseInterestedData(lead.notes);
+        const docStats = getDocumentStats(parsed?.documents);
+        return {
+          ...lead,
+          interestedData: parsed,
+          docStats,
+          agentName: lead.assigned_to ? agentMap.get(lead.assigned_to) || "Assigned Agent" : "Unassigned",
+        };
+      })
+      .sort((a, b) => {
+        const timeA = new Date(a.updated_at || a.last_call_at || a.created_at).getTime();
+        const timeB = new Date(b.updated_at || b.last_call_at || b.created_at).getTime();
+        return timeB - timeA;
+      });
   }, [rawLeads, agentMap]);
 
   // Filtered leads
