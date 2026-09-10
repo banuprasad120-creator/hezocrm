@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { FollowUpAlarmManager } from "@/components/crm/FollowUpAlarmManager";
 import { supabase } from "@/integrations/supabase/client";
+import { useCrmSession } from "@/hooks/use-crm-session";
 
 export const Route = createFileRoute("/_app")({
   ssr: false,
@@ -17,6 +18,9 @@ export const Route = createFileRoute("/_app")({
 });
 
 function AppLayout() {
+  const { data: session } = useCrmSession();
+  const isAgent = Boolean(session?.isAgent) && !session?.isAdmin;
+
   return (
     <SidebarProvider>
       <div className="flex min-h-dvh w-full bg-background text-foreground">
@@ -31,7 +35,7 @@ function AppLayout() {
           </main>
         </SidebarInset>
         <MobileBottomNav />
-        <FollowUpAlarmManager />
+        {isAgent && <FollowUpAlarmManager />}
       </div>
     </SidebarProvider>
   );

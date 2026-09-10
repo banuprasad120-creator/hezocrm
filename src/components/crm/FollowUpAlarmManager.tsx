@@ -28,8 +28,8 @@ interface FollowUpAlarmItem {
 
 export function FollowUpAlarmManager() {
   const { data: session } = useCrmSession();
-  const userId = session?.userId;
   const isAgent = Boolean(session?.isAgent) && !session?.isAdmin;
+  const userId = session?.userId;
   const navigate = useNavigate();
   const qc = useQueryClient();
 
@@ -145,7 +145,7 @@ export function FollowUpAlarmManager() {
     }
   }, [pendingFollowUps, today]);
 
-  if (!activeAlarm) return null;
+  if (!isAgent || !activeAlarm) return null;
 
   return (
     <div className="fixed bottom-5 right-5 z-50 max-w-md w-[92vw] sm:w-[420px] animate-in slide-in-from-bottom-5 duration-300">
