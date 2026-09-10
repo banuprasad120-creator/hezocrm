@@ -76,10 +76,12 @@ export function CallUpdateDialog({
     }
     setBusy(true);
     try {
+      const effectiveEmpId = employeeId || lead.assigned_to || null;
+
       const { error: cErr } = await supabase.from("call_history").insert({
         lead_id: lead.id,
         company_id: lead.company_id,
-        employee_id: employeeId,
+        employee_id: effectiveEmpId!,
         call_result: result,
         customer_response: result === "Connected" ? response : null,
         status,
@@ -92,11 +94,11 @@ export function CallUpdateDialog({
         .eq("id", lead.id);
       if (lErr) throw lErr;
 
-      if (date) {
+      if (date && effectiveEmpId) {
         const { error: fErr } = await supabase.from("follow_ups").insert({
           lead_id: lead.id,
           company_id: lead.company_id,
-          employee_id: employeeId,
+          employee_id: effectiveEmpId,
           follow_up_date: date,
           follow_up_time: time || null,
           note: notes || null,

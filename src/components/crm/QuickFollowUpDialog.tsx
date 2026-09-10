@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
+import { useCrmSession } from "@/hooks/use-crm-session";
 import { addDaysISO, inr, todayISO, type Lead } from "@/lib/crm";
 import { playFollowUpChime } from "@/lib/notification-sound";
 
@@ -43,6 +44,7 @@ export function QuickFollowUpDialog({
   onOpenChange,
   onSuccess,
 }: QuickFollowUpDialogProps) {
+  const { data: session } = useCrmSession();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
 
@@ -65,7 +67,12 @@ export function QuickFollowUpDialog({
 
     setBusy(true);
     try {
-      const empId = employeeId || lead.assigned_to || "";
+      const empId = employeeId || lead.assigned_to || session?.userId || null;
+      if (!empId) {
+        toast.error("Could not determine assigned employee for follow-up");
+        setBusy(false);
+        return;
+      }
 
       // 1. Insert into follow_ups table
       const { error: fuErr } = await supabase.from("follow_ups").insert({
@@ -80,7 +87,12 @@ export function QuickFollowUpDialog({
 
       if (fuErr) throw fuErr;
 
-      // 2. Insert into call_history for complete audit trail
+      // 2. Update lead status to Follow-up
+      await supabase.from("leads")
+        .update({ status: "Follow-up", last_call_at: new Date().toISOString() })
+        .eq("id", lead.id);
+
+      // 3. Insert into call_history for complete audit trail
       if (empId) {
         await supabase.from("call_history").insert({
           company_id: lead.company_id,
@@ -88,7 +100,7 @@ export function QuickFollowUpDialog({
           employee_id: empId,
           call_result: "Connected",
           customer_response: "Follow-up Required",
-          status: lead.status,
+          status: "Follow-up",
           notes: `📅 Scheduled follow-up callback on ${date}${time ? ` at ${time}` : ""}${notes ? `: ${notes.trim()}` : ""}`,
         });
       }

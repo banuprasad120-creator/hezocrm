@@ -90,16 +90,20 @@ function MyLeads() {
     queryFn: () => getActiveAgentBatch(companyId!, userId!),
   });
 
-  /* ── Fetch all assigned leads ── */
+  /* ── Fetch all assigned leads (prioritize newest batch and pending leads) ── */
   const { data: leads = [], isLoading, refetch } = useQuery({
     queryKey: ["my-leads", userId],
     enabled: Boolean(userId),
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("leads").select("*").eq("assigned_to", userId!)
-        .order("folder_date", { ascending: true }).order("created_at", { ascending: true });
+        .from("leads")
+        .select("*")
+        .eq("assigned_to", userId!)
+        .order("assigned_at", { ascending: false, nullsFirst: false })
+        .order("folder_date", { ascending: false })
+        .limit(10000);
       if (error) throw error;
-      return data as Lead[];
+      return (data ?? []) as Lead[];
     },
   });
 
@@ -121,23 +125,32 @@ function MyLeads() {
     return m;
   }, [followUps]);
 
-  /* ── Deduplicate leads by 10-digit mobile number and exclude Trashed / Out of Service leads ── */
+  /* ── Deduplicate leads by 10-digit mobile number and prioritize pending uncalled leads ── */
   const uniqueLeads = useMemo(() => {
     const seen = new Set<string>();
-    const out: Lead[] = [];
+    const pendingList: Lead[] = [];
+    const calledList: Lead[] = [];
     for (const l of leads) {
       if (isTrashLead(l.notes)) continue;
       const cleanMob = (l.mobile || "").replace(/\D/g, "").slice(-10);
       if (cleanMob) {
         if (!seen.has(cleanMob)) {
           seen.add(cleanMob);
-          out.push(l);
+          if (!CONTACTED_STATUSES.includes(l.status)) {
+            pendingList.push(l);
+          } else {
+            calledList.push(l);
+          }
         }
       } else {
-        out.push(l);
+        if (!CONTACTED_STATUSES.includes(l.status)) {
+          pendingList.push(l);
+        } else {
+          calledList.push(l);
+        }
       }
     }
-    return out;
+    return [...pendingList, ...calledList];
   }, [leads]);
 
   /* ── Stats ── */
@@ -159,10 +172,28 @@ function MyLeads() {
   const currentLead = pendingLeads[0] ?? null;
 
   /* ── Batch Progress Calculations ── */
-  const batchTotal = activeBatch?.assigned_count || (uniqueLeads.length > 0 ? Math.max(uniqueLeads.length, batchSize) : batchSize);
-  const batchCompleted = stats.called;
-  const batchRemaining = stats.pending;
-  const batchPercent = batchTotal > 0 ? Math.min(100, Math.round((batchCompleted / (batchCompleted + batchRemaining || batchTotal)) * 100)) : 0;
+  const activeBatchLeadIds = useMemo(
+    () => new Set((activeBatch?.lead_ids as string[]) || []),
+    [activeBatch?.lead_ids]
+  );
+
+  const { batchTotal, batchCompleted, batchRemaining, batchPercent } = useMemo(() => {
+    if (activeBatch && activeBatchLeadIds.size > 0) {
+      const total = activeBatch.assigned_count || activeBatchLeadIds.size;
+      const remaining = uniqueLeads.filter(
+        (l) => activeBatchLeadIds.has(l.id) && !CONTACTED_STATUSES.includes(l.status)
+      ).length;
+      const completed = Math.max(0, total - remaining);
+      const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 100;
+      return { batchTotal: total, batchCompleted: completed, batchRemaining: remaining, batchPercent: percent };
+    }
+
+    const remaining = stats.pending;
+    const total = remaining > 0 ? remaining : batchSize;
+    const completed = 0;
+    const percent = remaining === 0 ? 100 : 0;
+    return { batchTotal: total, batchCompleted: completed, batchRemaining: remaining, batchPercent: percent };
+  }, [activeBatch, activeBatchLeadIds, uniqueLeads, stats.pending, batchSize]);
 
   /* ── Out of Service (Trash) Mutation ── */
   const outOfServiceM = useMutation({
@@ -229,14 +260,17 @@ function MyLeads() {
         } else {
           toast.success(`🎉 ${res.assigned_count} clients successfully added to your calling queue!`);
         }
-        await qc.invalidateQueries({ queryKey: ["my-leads"] });
-        await qc.invalidateQueries({ queryKey: ["active-batch"] });
-        await qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
-        await qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["my-leads"] }),
+          qc.invalidateQueries({ queryKey: ["active-batch"] }),
+          qc.invalidateQueries({ queryKey: ["all-leads-stats"] }),
+          qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] }),
+        ]);
+        await refetch();
         setFetchModalOpen(false);
-      } else if (res.assigned_count === 0) {
+      } else if (res.assigned_count === 0 || !res.success) {
         if (!isAutomatic) {
-          toast.info("No unassigned clients available in company folders right now.");
+          toast.info(res.message || "No unassigned clients available in company folders right now.");
         }
       }
     } catch (err) {

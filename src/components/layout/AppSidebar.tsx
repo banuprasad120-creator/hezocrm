@@ -36,7 +36,6 @@ const adminGroups: NavGroup[] = [
       { to: "/leads", title: "All Leads", icon: PhoneCall },
       { to: "/diary", title: "Daily Diary", icon: BookOpen },
       { to: "/interested", title: "Interested Leads", icon: Flame },
-      { to: "/follow-ups", title: "Follow-ups", icon: CalendarClock },
       { to: "/trash", title: "Trash", icon: Trash2 },
       { to: "/agents", title: "Agents", icon: Users },
       { to: "/attendance", title: "Attendance", icon: CalendarClock },

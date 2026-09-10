@@ -39,52 +39,80 @@ function NotificationsPage() {
     enabled: Boolean(userId),
     queryFn: async (): Promise<Item[]> => {
       const today = todayISO();
-      const followQuery = supabase.from("follow_ups")
-        .select("id, lead_id, follow_up_date, follow_up_time, note, created_at")
-        .eq("is_done", false).lte("follow_up_date", today)
-        .order("follow_up_date", { ascending: true }).limit(20);
-      const assignQuery = supabase.from("lead_assignments")
-        .select("id, lead_id, assigned_at").order("assigned_at", { ascending: false }).limit(15);
+      // Only agents get follow-up notifications. Admin does not need follow-up notifications.
+      const followQuery = !isAdmin && userId
+        ? supabase.from("follow_ups")
+            .select("id, lead_id, follow_up_date, follow_up_time, note, created_at")
+            .eq("employee_id", userId)
+            .eq("is_done", false)
+            .lte("follow_up_date", today)
+            .order("follow_up_date", { ascending: true })
+            .limit(20)
+        : null;
+
+      const assignQuery = isAdmin
+        ? supabase.from("lead_assignments")
+            .select("id, lead_id, assigned_at")
+            .order("assigned_at", { ascending: false })
+            .limit(25)
+        : supabase.from("lead_assignments")
+            .select("id, lead_id, assigned_at")
+            .eq("employee_id", userId!)
+            .order("assigned_at", { ascending: false })
+            .limit(15);
+
       const importQuery = isAdmin
         ? supabase.from("lead_imports")
             .select("id, file_name, folder_date, imported_count, duplicate_count, error_count, created_at, status")
-            .order("created_at", { ascending: false }).limit(10)
+            .order("created_at", { ascending: false })
+            .limit(15)
         : null;
 
-      const [follows, assigns, imports] = await Promise.all([followQuery, assignQuery, importQuery]);
+      const [follows, assigns, imports] = await Promise.all([
+        followQuery ? followQuery : Promise.resolve({ data: [] }),
+        assignQuery,
+        importQuery ? importQuery : Promise.resolve({ data: [] }),
+      ]);
 
       const out: Item[] = [];
-      for (const f of follows.data ?? []) {
-        out.push({
-          id: `f-${f.id}`,
-          type: "followup",
-          title: f.follow_up_date < today ? "Overdue follow-up" : "Follow-up due today",
-          body: `${f.follow_up_date}${f.follow_up_time ? ` at ${String(f.follow_up_time).slice(0, 5)}` : ""}${f.note ? ` · ${f.note}` : ""}`,
-          time: formatDateTime(f.created_at),
-          href: "/lead/$leadId",
-          params: { leadId: f.lead_id },
-        });
+      if (!isAdmin) {
+        for (const f of follows.data ?? []) {
+          out.push({
+            id: `f-${f.id}`,
+            type: "followup",
+            title: f.follow_up_date < today ? "Overdue follow-up" : "Follow-up due today",
+            body: `${f.follow_up_date}${f.follow_up_time ? ` at ${String(f.follow_up_time).slice(0, 5)}` : ""}${f.note ? ` · ${f.note}` : ""}`,
+            time: formatDateTime(f.created_at),
+            href: "/lead/$leadId",
+            params: { leadId: f.lead_id },
+          });
+        }
       }
+
       for (const a of assigns.data ?? []) {
         out.push({
           id: `a-${a.id}`,
           type: "assignment",
           title: "Lead assigned",
-          body: "A lead was assigned to a calling agent.",
+          body: isAdmin ? "A lead was assigned to a calling agent." : "A new lead was assigned to your calling queue.",
           time: formatDateTime(a.assigned_at),
           href: "/lead/$leadId",
           params: { leadId: a.lead_id },
         });
       }
-      for (const im of imports?.data ?? []) {
-        out.push({
-          id: `i-${im.id}`,
-          type: "import",
-          title: `Import ${im.status} — ${im.file_name}`,
-          body: `${im.imported_count} imported · ${im.duplicate_count} duplicates · ${im.error_count} errors · folder ${im.folder_date}`,
-          time: formatDateTime(im.created_at),
-        });
+
+      if (isAdmin) {
+        for (const im of imports?.data ?? []) {
+          out.push({
+            id: `i-${im.id}`,
+            type: "import",
+            title: `Import ${im.status} — ${im.file_name}`,
+            body: `${im.imported_count} imported · ${im.duplicate_count} duplicates · ${im.error_count} errors · folder ${im.folder_date}`,
+            time: formatDateTime(im.created_at),
+          });
+        }
       }
+
       return out.slice(0, 40);
     },
   });
@@ -98,7 +126,10 @@ function NotificationsPage() {
 
   return (
     <>
-      <PageHeader title="Notifications" description="Follow-ups due, lead assignments and import activity — from live data." />
+      <PageHeader
+        title="Notifications"
+        description={isAdmin ? "Live lead assignments, system events and file imports." : "Follow-ups due and recent lead assignments."}
+      />
 
       <div className="rounded-2xl border bg-card card-elevated">
         {isLoading && <p className="p-6 text-sm text-muted-foreground">Loading activity…</p>}

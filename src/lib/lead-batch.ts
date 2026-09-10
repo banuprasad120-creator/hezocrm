@@ -123,6 +123,15 @@ export interface AllocationResult {
  */
 export async function getUnassignedLeadsCount(companyId: string, folderDate?: string | null): Promise<number> {
   try {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const { data, error } = await (supabase.rpc as any)("get_unassigned_leads_count", {
+      p_company_id: companyId,
+      p_folder_date: folderDate && folderDate !== "all" ? folderDate : null,
+    });
+    if (!error && typeof data === "number") {
+      return data;
+    }
+
     let q = supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
@@ -132,8 +141,8 @@ export async function getUnassignedLeadsCount(companyId: string, folderDate?: st
     if (folderDate && folderDate !== "all") {
       q = q.eq("folder_date", folderDate);
     }
-    const { count, error } = await q;
-    if (error) return 0;
+    const { count, error: qErr } = await q;
+    if (qErr) return 0;
     return count ?? 0;
   } catch {
     return 0;
@@ -152,11 +161,6 @@ export async function allocateNextLeadBatch(
   folderDate?: string | null
 ): Promise<AllocationResult> {
   try {
-    // If manual or custom batch, execute client-side direct allocation
-    if (allowWhenPending || source !== "AUTO_BATCH_REFILL") {
-      return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderDate);
-    }
-
     // 1. Try atomic PostgreSQL RPC function
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { data: rpcRes, error: rpcErr } = await (supabase.rpc as any)("allocate_lead_batch", {
@@ -164,10 +168,16 @@ export async function allocateNextLeadBatch(
       p_employee_id: employeeId,
       p_batch_size: batchSize,
       p_source: source,
+      p_allow_when_pending: Boolean(allowWhenPending),
+      p_folder_date: folderDate && folderDate !== "all" ? folderDate : null,
     });
 
     if (!rpcErr && rpcRes) {
       return rpcRes as AllocationResult;
+    }
+
+    if (rpcErr) {
+      console.warn("[allocateNextLeadBatch] RPC warning, falling back to client-side:", rpcErr);
     }
 
     // 2. Client-side fallback if RPC is ever unreachable

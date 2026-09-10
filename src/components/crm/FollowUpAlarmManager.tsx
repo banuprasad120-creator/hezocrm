@@ -29,6 +29,7 @@ interface FollowUpAlarmItem {
 export function FollowUpAlarmManager() {
   const { data: session } = useCrmSession();
   const userId = session?.userId;
+  const isAgent = Boolean(session?.isAgent) && !session?.isAdmin;
   const navigate = useNavigate();
   const qc = useQueryClient();
 
@@ -36,32 +37,28 @@ export function FollowUpAlarmManager() {
   const alertedIdsRef = useRef<Set<string>>(new Set());
   const [activeAlarm, setActiveAlarm] = useState<FollowUpAlarmItem | null>(null);
 
-  // Ask for notification permission once
+  // Ask for notification permission once (strictly only for calling agents)
   useEffect(() => {
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+    if (isAgent && typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
-  }, []);
+  }, [isAgent]);
 
-  // Fetch today's pending follow-ups
+  // Fetch today's pending follow-ups (strictly only for calling agents)
   const today = todayISO();
   const { data: pendingFollowUps = [] } = useQuery({
     queryKey: ["follow-up-alarms", userId, session?.companyId],
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && isAgent,
     refetchInterval: 15000, // Recheck every 15 seconds for accurate alarm trigger
     queryFn: async () => {
-      let query = supabase
+      if (!isAgent) return [];
+      const { data, error } = await supabase
         .from("follow_ups")
         .select("id, lead_id, follow_up_date, follow_up_time, note, is_done, leads(id, customer_name, mobile, loan_amount, loan_type, notes)")
         .eq("is_done", false)
+        .eq("employee_id", userId!)
         .lte("follow_up_date", today);
 
-      if (!session?.isAdmin && session?.companyId) {
-        // Match user's assignments or company follow-ups
-        query = query.or(`employee_id.eq.${userId},employee_id.is.null`);
-      }
-
-      const { data, error } = await query;
       if (error) {
         console.error("[FollowUpAlarmManager] query error:", error);
         return [];

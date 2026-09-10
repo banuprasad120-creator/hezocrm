@@ -17,7 +17,6 @@ const adminRoutes = [
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/daily-leads", label: "Daily Leads", icon: FolderPlus },
   { to: "/leads", label: "All Leads", icon: PhoneCall },
-  { to: "/follow-ups", label: "Follow-ups", icon: CalendarClock },
   { to: "/agents", label: "Agents", icon: Users },
   { to: "/attendance", label: "Attendance", icon: CalendarClock },
   { to: "/folders", label: "Folders", icon: FolderKanban },

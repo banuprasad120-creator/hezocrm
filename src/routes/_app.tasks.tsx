@@ -84,8 +84,7 @@ function TasksPage() {
     <>
       <PageHeader
         title="Tasks"
-        description="Every scheduled follow-up, grouped by urgency."
-        actions={<Button asChild size="sm" variant="outline"><Link to="/follow-ups"><CalendarClock className="mr-1 h-4 w-4" /> Follow-ups</Link></Button>}
+        description="Assigned work tasks grouped by urgency."
       />
 
       {isLoading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading tasks…</p>}
