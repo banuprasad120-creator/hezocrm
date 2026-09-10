@@ -105,9 +105,6 @@ export function QuickFollowUpDialog({
         });
       }
 
-      // 3. Play confirmation sound
-      playFollowUpChime();
-
       toast.success(`🎉 Follow-up scheduled for ${lead.customer_name}!`, {
         description: `Alarm will sound on ${date}${time ? ` at ${time}` : ""}.`,
       });

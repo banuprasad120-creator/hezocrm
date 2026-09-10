@@ -19,7 +19,7 @@ export const Route = createFileRoute("/_app")({
 
 function AppLayout() {
   const { data: session } = useCrmSession();
-  const isAgent = Boolean(session?.isAgent) && !session?.isAdmin;
+  const hasUser = Boolean(session?.userId);
 
   return (
     <SidebarProvider>
@@ -35,7 +35,7 @@ function AppLayout() {
           </main>
         </SidebarInset>
         <MobileBottomNav />
-        {isAgent && <FollowUpAlarmManager />}
+        {hasUser && <FollowUpAlarmManager />}
       </div>
     </SidebarProvider>
   );

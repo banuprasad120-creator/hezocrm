@@ -28,7 +28,6 @@ interface FollowUpAlarmItem {
 
 export function FollowUpAlarmManager() {
   const { data: session } = useCrmSession();
-  const isAgent = Boolean(session?.isAgent) && !session?.isAdmin;
   const userId = session?.userId;
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -41,8 +40,10 @@ export function FollowUpAlarmManager() {
     return `hezo_alerted_followups_${year}-${month}-${day}`;
   };
 
-  // Track follow-up IDs that have already alerted today to avoid continuous loop or refresh rings
+  // Track follow-up IDs that have already alerted today to avoid duplicate rings
   const alertedIdsRef = useRef<Set<string>>(new Set());
+  const [activeAlarm, setActiveAlarm] = useState<FollowUpAlarmItem | null>(null);
+  const [clockTick, setClockTick] = useState<number>(0);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -58,28 +59,34 @@ export function FollowUpAlarmManager() {
     }
   }, []);
 
-  const [activeAlarm, setActiveAlarm] = useState<FollowUpAlarmItem | null>(null);
-
-  // Ask for notification permission once (strictly only for calling agents)
+  // Real-time clock tick every 2 seconds to catch minute changes immediately
   useEffect(() => {
-    if (isAgent && typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+    const timer = setInterval(() => {
+      setClockTick(Date.now());
+    }, 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Ask for notification permission once
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
-  }, [isAgent]);
+  }, [userId]);
 
-  // Fetch today's pending follow-ups (strictly only for calling agents)
+  // Fetch today's pending follow-ups for this user
   const today = todayISO();
   const { data: pendingFollowUps = [] } = useQuery({
     queryKey: ["follow-up-alarms", userId, session?.companyId],
-    enabled: Boolean(userId) && isAgent,
-    refetchInterval: 15000, // Recheck every 15 seconds for accurate alarm trigger
+    enabled: Boolean(userId),
+    refetchInterval: 10000, // Recheck every 10 seconds
     queryFn: async () => {
-      if (!isAgent) return [];
+      if (!userId) return [];
       const { data, error } = await supabase
         .from("follow_ups")
         .select("id, lead_id, follow_up_date, follow_up_time, note, is_done, leads(id, customer_name, mobile, loan_amount, loan_type, notes)")
         .eq("is_done", false)
-        .eq("employee_id", userId!)
+        .eq("employee_id", userId)
         .lte("follow_up_date", today);
 
       if (error) {
@@ -91,7 +98,7 @@ export function FollowUpAlarmManager() {
   });
 
 function isFollowUpDueRightNow(itemDate: string, itemTime: string | null): boolean {
-  if (!itemTime) return false; // At that scheduled callback time only
+  if (!itemTime) return false; // Must have a selected callback time
 
   const now = new Date();
   const year = now.getFullYear();
@@ -121,9 +128,9 @@ function isFollowUpDueRightNow(itemDate: string, itemTime: string | null): boole
   const currentTotalMinutes = currentH * 60 + currentM;
   const targetTotalMinutes = targetH * 60 + targetM;
 
-  // Due strictly when clock reaches the scheduled minute (diff === 0)
+  // Due at the exact scheduled minute or within current minute (diff >= 0 && diff <= 1)
   const diff = currentTotalMinutes - targetTotalMinutes;
-  return diff === 0;
+  return diff >= 0 && diff <= 1;
 }
 
 // Alarm checker loop - fires alarm strictly at the scheduled callback minute
@@ -183,9 +190,9 @@ useEffect(() => {
         break; // Alert one at a time
       }
     }
-  }, [pendingFollowUps, today]);
+  }, [pendingFollowUps, today, clockTick]);
 
-  if (!isAgent || !activeAlarm) return null;
+  if (!activeAlarm) return null;
 
   return (
     <div className="fixed bottom-5 right-5 z-50 max-w-md w-[92vw] sm:w-[420px] animate-in slide-in-from-bottom-5 duration-300">
