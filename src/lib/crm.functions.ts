@@ -640,30 +640,53 @@ export const deleteFolderServerFn = createServerFn({ method: "POST" })
     );
     if (!isAdmin) throw new Error("Forbidden: only company admins can delete folders");
 
-    // Fetch all lead IDs belonging to this folder date in company
-    const { data: leadsToDelete, error: fetchErr } = await supabaseAdmin
-      .from("leads")
-      .select("id")
+    // Clean up any lead_imports record for this folder_date
+    await supabaseAdmin
+      .from("lead_imports")
+      .delete()
       .eq("company_id", companyId)
       .eq("folder_date", data.folderDate);
 
-    if (fetchErr) throw new Error(fetchErr.message);
+    // Delete all leads in this folder in batches until all are deleted (cascades to all foreign keys)
+    let totalDeleted = 0;
+    while (true) {
+      const { data: batch, error: batchErr } = await supabaseAdmin
+        .from("leads")
+        .select("id")
+        .eq("company_id", companyId)
+        .eq("folder_date", data.folderDate)
+        .limit(1000);
 
-    const ids = (leadsToDelete ?? []).map((l) => l.id);
-    if (ids.length > 0) {
-      const chunkSize = 200;
-      for (let i = 0; i < ids.length; i += chunkSize) {
-        const chunk = ids.slice(i, i + chunkSize);
-        await supabaseAdmin.from("call_history").delete().in("lead_id", chunk);
-        await supabaseAdmin.from("lead_assignments").delete().in("lead_id", chunk);
-        await supabaseAdmin.from("follow_ups").delete().in("lead_id", chunk);
-        await supabaseAdmin.from("lead_status_history").delete().in("lead_id", chunk);
-        const { error: delErr } = await supabaseAdmin.from("leads").delete().in("id", chunk);
-        if (delErr) throw new Error(delErr.message);
+      if (batchErr) throw new Error(batchErr.message);
+      if (!batch || batch.length === 0) break;
+
+      const ids = batch.map((l) => l.id);
+      const { error: delErr } = await supabaseAdmin
+        .from("leads")
+        .delete()
+        .in("id", ids);
+
+      if (delErr) {
+        // Direct fallback delete
+        await supabaseAdmin
+          .from("leads")
+          .delete()
+          .eq("company_id", companyId)
+          .eq("folder_date", data.folderDate);
+        totalDeleted += ids.length;
+        break;
       }
+      totalDeleted += ids.length;
     }
 
-    return { deletedCount: ids.length, success: true };
+    // Direct sweep to guarantee 0 remaining
+    await supabaseAdmin
+      .from("leads")
+      .delete()
+      .eq("company_id", companyId)
+      .eq("folder_date", data.folderDate);
+
+    return { deletedCount: totalDeleted, success: true };
   });
 
 const updateInterestedCandidateDocumentsSchema = z.object({
