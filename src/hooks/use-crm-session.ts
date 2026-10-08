@@ -15,10 +15,11 @@ export type CrmSession = {
 export function useCrmSession() {
   return useQuery({
     queryKey: ["crm-session"],
-    staleTime: 30_000,
+    staleTime: 2 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
     queryFn: async (): Promise<CrmSession> => {
-      const { data: userRes } = await supabase.auth.getUser();
-      const user = userRes.user;
+      const { data: sessionRes } = await supabase.auth.getSession();
+      const user = sessionRes.session?.user;
       if (!user) {
         return { userId: null, email: null, fullName: "", companyId: null, role: null, isAdmin: false, isAgent: false };
       }

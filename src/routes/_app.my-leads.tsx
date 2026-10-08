@@ -223,6 +223,14 @@ function MyLeads() {
         .update({ status: "Interested", last_call_at: now })
         .eq("id", lead.id);
       if (error) throw error;
+
+      // Auto-resolve any pending follow-ups for this lead
+      await supabase
+        .from("follow_ups")
+        .update({ is_done: true })
+        .eq("lead_id", lead.id)
+        .eq("is_done", false);
+
       await supabase.from("call_history").insert({
         lead_id: lead.id,
         company_id: lead.company_id,
@@ -236,6 +244,11 @@ function MyLeads() {
     onSuccess: () => {
       toast.success("🎉 Lead marked as Interested!");
       qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["follow-ups"] });
+      qc.invalidateQueries({ queryKey: ["follow-up-alarms"] });
+      qc.invalidateQueries({ queryKey: ["my-followups-open"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["interested-leads"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });

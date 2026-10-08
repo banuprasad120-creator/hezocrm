@@ -575,6 +575,97 @@ export const permanentDeleteLeadServerFn = createServerFn({ method: "POST" })
     return { success: true };
   });
 
+const bulkPermanentDeleteLeadsSchema = z.object({
+  leadIds: z.array(z.string()).min(1),
+});
+
+/** Permanently deletes multiple leads and all associated records (Admins only) */
+export const bulkPermanentDeleteLeadsServerFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => bulkPermanentDeleteLeadsSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const userId = context.userId;
+
+    const { data: roles } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId);
+    const isAdmin = (roles ?? []).some(
+      (r) => r.role === "company_admin" || r.role === "super_admin"
+    );
+    if (!isAdmin) throw new Error("Forbidden: only company admins can permanently delete leads");
+
+    const ids = data.leadIds;
+    const chunkSize = 200;
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      await supabaseAdmin.from("call_history").delete().in("lead_id", chunk);
+      await supabaseAdmin.from("lead_assignments").delete().in("lead_id", chunk);
+      await supabaseAdmin.from("follow_ups").delete().in("lead_id", chunk);
+      await supabaseAdmin.from("lead_status_history").delete().in("lead_id", chunk);
+      const { error: delErr } = await supabaseAdmin.from("leads").delete().in("id", chunk);
+      if (delErr) throw new Error(delErr.message);
+    }
+
+    return { count: ids.length, success: true };
+  });
+
+const deleteFolderSchema = z.object({
+  folderDate: z.string().min(1),
+});
+
+/** Permanently deletes all leads in a specific date folder for the company (Admins only) */
+export const deleteFolderServerFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => deleteFolderSchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const userId = context.userId;
+
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .maybeSingle();
+    const companyId = profile?.company_id;
+    if (!companyId) throw new Error("No company found for this user");
+
+    const { data: roles } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId);
+    const isAdmin = (roles ?? []).some(
+      (r) => r.role === "company_admin" || r.role === "super_admin"
+    );
+    if (!isAdmin) throw new Error("Forbidden: only company admins can delete folders");
+
+    // Fetch all lead IDs belonging to this folder date in company
+    const { data: leadsToDelete, error: fetchErr } = await supabaseAdmin
+      .from("leads")
+      .select("id")
+      .eq("company_id", companyId)
+      .eq("folder_date", data.folderDate);
+
+    if (fetchErr) throw new Error(fetchErr.message);
+
+    const ids = (leadsToDelete ?? []).map((l) => l.id);
+    if (ids.length > 0) {
+      const chunkSize = 200;
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        await supabaseAdmin.from("call_history").delete().in("lead_id", chunk);
+        await supabaseAdmin.from("lead_assignments").delete().in("lead_id", chunk);
+        await supabaseAdmin.from("follow_ups").delete().in("lead_id", chunk);
+        await supabaseAdmin.from("lead_status_history").delete().in("lead_id", chunk);
+        const { error: delErr } = await supabaseAdmin.from("leads").delete().in("id", chunk);
+        if (delErr) throw new Error(delErr.message);
+      }
+    }
+
+    return { deletedCount: ids.length, success: true };
+  });
+
 const updateInterestedCandidateDocumentsSchema = z.object({
   leadId: z.string(),
   documents: z.array(

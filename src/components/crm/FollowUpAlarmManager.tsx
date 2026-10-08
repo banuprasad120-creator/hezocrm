@@ -59,11 +59,11 @@ export function FollowUpAlarmManager() {
     }
   }, []);
 
-  // Real-time clock tick every 2 seconds to catch minute changes immediately
+  // Alarm check interval every 30 seconds instead of 2 seconds
   useEffect(() => {
     const timer = setInterval(() => {
       setClockTick(Date.now());
-    }, 2000);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -79,7 +79,8 @@ export function FollowUpAlarmManager() {
   const { data: pendingFollowUps = [] } = useQuery({
     queryKey: ["follow-up-alarms", userId, session?.companyId],
     enabled: Boolean(userId),
-    refetchInterval: 10000, // Recheck every 10 seconds
+    refetchInterval: 60000, // Recheck every 60 seconds
+    staleTime: 45000,
     queryFn: async () => {
       if (!userId) return [];
       const { data, error } = await supabase

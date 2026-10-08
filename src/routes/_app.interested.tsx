@@ -84,7 +84,7 @@ function InterestedLeadsPage() {
       let query = supabase
         .from("leads")
         .select("*")
-        .in("status", ["Interested", "Documents Pending", "Documents Received", "Application Submitted", "Processing", "Approved"]);
+        .in("status", ["Interested", "Documents Pending", "Application Submitted", "Processing", "Approved"]);
       if (companyId) query = query.eq("company_id", companyId);
       if (!isAdmin && userId) query = query.eq("assigned_to", userId);
       query = query

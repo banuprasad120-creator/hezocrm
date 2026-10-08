@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderKanban, FolderPlus, Loader2, Upload, Users2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { FolderKanban, FolderPlus, Loader2, Trash2, Upload, Users2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, todayISO } from "@/lib/crm";
+import { deleteFolderServerFn } from "@/lib/crm.functions";
 
 export const Route = createFileRoute("/_app/folders")({
   head: () => ({
@@ -38,6 +39,25 @@ function FoldersPage() {
   const [newOpen, setNewOpen] = useState(false);
   const [newDate, setNewDate] = useState(todayISO());
   const [importDate, setImportDate] = useState<string | null>(null);
+  const [folderToDelete, setFolderToDelete] = useState<{ date: string; count: number } | null>(null);
+
+  const deleteFolderM = useMutation({
+    mutationFn: async (date: string) => {
+      return await deleteFolderServerFn({ data: { folderDate: date } });
+    },
+    onSuccess: (res, date) => {
+      toast.success(`Deleted folder ${fmt(date)} and removed ${res.deletedCount} leads`);
+      setFolderToDelete(null);
+      qc.invalidateQueries({ queryKey: ["folder-overview"] });
+      qc.invalidateQueries({ queryKey: ["lead-folders"] });
+      qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
+      qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete folder");
+    },
+  });
 
   const { data: folders = [], isLoading } = useQuery({
     queryKey: ["folder-overview", companyId],
@@ -141,8 +161,22 @@ function FoldersPage() {
               <div key={f.date} className="group relative overflow-hidden rounded-2xl border bg-card p-5 card-elevated transition hover:-translate-y-1 hover:card-float">
                 <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-br from-brand/20 to-brand-2/10 opacity-40" />
                 <div className="relative">
-                  <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-brand/25 to-brand-2/10 text-brand shadow-sm">
-                    <FolderKanban className="h-5 w-5" />
+                  <div className="flex items-start justify-between">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-brand/25 to-brand-2/10 text-brand shadow-sm">
+                      <FolderKanban className="h-5 w-5" />
+                    </div>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                      title="Delete this folder & its leads"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFolderToDelete({ date: f.date, count: f.count });
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                   <h3 className="mt-4 text-base font-bold">📁 {fmt(f.date)}</h3>
                   <p className="text-xs text-muted-foreground">
@@ -155,12 +189,24 @@ function FoldersPage() {
                     </div>
                     <Progress value={progress} className="h-1.5" />
                   </div>
-                  <div className="mt-4 flex items-center gap-2">
+                  <div className="mt-4 flex items-center gap-1.5">
                     <Button size="sm" className="h-8 flex-1 gradient-brand text-xs text-white" onClick={() => openFolder(f.date)}>
                       <Users2 className="mr-1 h-3 w-3" /> Open & Assign
                     </Button>
-                    <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setImportDate(f.date)}>
+                    <Button size="sm" variant="outline" className="h-8 px-2.5 text-xs" onClick={() => setImportDate(f.date)}>
                       <Upload className="mr-1 h-3 w-3" /> Upload
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 px-2.5 text-xs text-destructive hover:bg-destructive/10 border-destructive/30"
+                      title="Delete folder & data"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFolderToDelete({ date: f.date, count: f.count });
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>
@@ -169,6 +215,37 @@ function FoldersPage() {
           })}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={Boolean(folderToDelete)} onOpenChange={(open) => !open && setFolderToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <Trash2 className="h-5 w-5" /> Delete Folder {folderToDelete ? fmt(folderToDelete.date) : ""}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete folder <strong>{folderToDelete ? fmt(folderToDelete.date) : ""}</strong>?
+              <br /><br />
+              This will permanently delete all <strong>{folderToDelete?.count.toLocaleString("en-IN")}</strong> uploaded leads and their call histories in this folder. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={deleteFolderM.isPending} onClick={() => setFolderToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteFolderM.isPending}
+              onClick={() => {
+                if (folderToDelete) deleteFolderM.mutate(folderToDelete.date);
+              }}
+            >
+              {deleteFolderM.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+              Yes, Delete Entire Folder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
         <DialogContent>

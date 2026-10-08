@@ -1,11 +1,11 @@
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import { createFileRoute, useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Building2, CreditCard, Flame, History, PhoneCall } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Building2, CreditCard, Flame, History, Loader2, PhoneCall, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,6 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { parseInterestedData } from "@/lib/interested-lead";
+import { permanentDeleteLeadServerFn } from "@/lib/crm.functions";
 
 export const Route = createFileRoute("/_app/lead/$leadId")({
   head: () => ({
@@ -138,6 +139,24 @@ function LeadDetail() {
     }
   };
 
+  const navigate = useNavigate();
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+  const deleteLeadM = useMutation({
+    mutationFn: async () => {
+      return await permanentDeleteLeadServerFn({ data: { leadId } });
+    },
+    onSuccess: () => {
+      toast.success("Lead permanently deleted");
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
+      qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+      navigate({ to: "/leads" });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete lead");
+    },
+  });
+
   if (!lead) return <p className="text-sm text-muted-foreground">Loading lead…</p>;
 
   const canUpdate = session?.isAdmin || lead.assigned_to === session?.userId;
@@ -163,6 +182,16 @@ function LeadDetail() {
             {canUpdate && (
               <Button size="sm" variant="outline" className="h-9 font-semibold text-xs sm:text-sm" onClick={() => setOpen(true)}>
                 UPDATE
+              </Button>
+            )}
+            {session?.isAdmin && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 font-semibold text-xs sm:text-sm text-destructive hover:bg-destructive/10 border-destructive/30"
+                onClick={() => setDeleteConfirmOpen(true)}
+              >
+                <Trash2 className="mr-1 h-3.5 w-3.5" /> DELETE
               </Button>
             )}
           </div>
@@ -378,6 +407,35 @@ function LeadDetail() {
       </div>
 
       <CallUpdateDialog lead={lead} employeeId={session?.userId ?? ""} open={open} onOpenChange={setOpen} />
+
+      {/* Delete Lead Confirmation Dialog */}
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <Trash2 className="h-5 w-5" /> Delete Lead {lead.customer_name}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete lead <strong>{lead.customer_name}</strong> ({lead.mobile})?
+              <br /><br />
+              This will permanently delete this lead and its entire call history and status logs. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={deleteLeadM.isPending} onClick={() => setDeleteConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteLeadM.isPending}
+              onClick={() => deleteLeadM.mutate()}
+            >
+              {deleteLeadM.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+              Yes, Delete Lead
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

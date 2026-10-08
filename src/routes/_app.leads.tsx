@@ -1,8 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Download, Inbox, Loader2, MessageCircle, Phone, Search, Upload, Users2, Eye,
+  Download, Inbox, Loader2, MessageCircle, Phone, Search, Trash2, Upload, Users2, Eye,
   Clock, Flame, PhoneCall, CheckCircle2, RefreshCw, Plus, UserPlus, UserCheck, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StatCard } from "@/components/common/StatCard";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
@@ -20,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { cn } from "@/lib/utils";
+import { bulkPermanentDeleteLeadsServerFn, permanentDeleteLeadServerFn } from "@/lib/crm.functions";
 
 export const Route = createFileRoute("/_app/leads")({
   validateSearch: (search: Record<string, unknown>): { agent?: string; status?: string } => ({
@@ -250,6 +252,45 @@ function LeadsPage() {
     }
   };
 
+  const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+
+  const bulkDeleteM = useMutation({
+    mutationFn: async (ids: string[]) => {
+      return await bulkPermanentDeleteLeadsServerFn({ data: { leadIds: ids } });
+    },
+    onSuccess: (res) => {
+      toast.success(`Permanently deleted ${res.count} lead(s)`);
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
+      qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete leads");
+    },
+  });
+
+  const singleDeleteM = useMutation({
+    mutationFn: async (leadId: string) => {
+      return await permanentDeleteLeadServerFn({ data: { leadId } });
+    },
+    onSuccess: () => {
+      toast.success("Lead permanently deleted");
+      setLeadToDelete(null);
+      qc.invalidateQueries({ queryKey: ["all-leads"] });
+      qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete lead");
+    },
+  });
+
+  const deleteSelected = () => {
+    if (selected.size === 0) return;
+    if (window.confirm(`Are you sure you want to permanently delete ${selected.size} selected lead(s)? This cannot be undone.`)) {
+      bulkDeleteM.mutate([...selected]);
+    }
+  };
+
   const exportCsv = async () => {
     if (busy) return;
     setBusy(true);
@@ -436,6 +477,16 @@ function LeadsPage() {
                 <Button size="sm" className="gradient-brand text-white font-bold" disabled={busy || !assignAgent} onClick={assignSelected}>
                   <Users2 className="mr-1.5 h-4 w-4" /> Assign Selected ({selected.size})
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:bg-destructive/10 border-destructive/30 font-semibold"
+                  disabled={busy || bulkDeleteM.isPending}
+                  onClick={deleteSelected}
+                >
+                  {bulkDeleteM.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
+                  Delete Selected ({selected.size})
+                </Button>
                 <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
               </div>
             </div>
@@ -524,6 +575,15 @@ function LeadsPage() {
                         </Button>
                         <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="Open lead">
                           <Link to="/lead/$leadId" params={{ leadId: l.id }}><Eye className="h-4 w-4" /></Link>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                          title="Delete lead"
+                          onClick={() => setLeadToDelete(l)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
@@ -618,6 +678,15 @@ function LeadsPage() {
                             <Button asChild variant="ghost" size="icon" className="h-8 w-8" aria-label="Open lead">
                               <Link to="/lead/$leadId" params={{ leadId: l.id }}><Eye className="h-4 w-4" /></Link>
                             </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                              title={`Delete ${l.customer_name}`}
+                              onClick={() => setLeadToDelete(l)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -666,6 +735,37 @@ function LeadsPage() {
           qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
         }}
       />
+
+      {/* Delete Single Lead Dialog */}
+      <Dialog open={Boolean(leadToDelete)} onOpenChange={(open) => !open && setLeadToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <Trash2 className="h-5 w-5" /> Delete Lead {leadToDelete?.customer_name}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete <strong>{leadToDelete?.customer_name}</strong> ({leadToDelete?.mobile})?
+              <br /><br />
+              This will permanently remove this lead and all associated call records. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={singleDeleteM.isPending} onClick={() => setLeadToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={singleDeleteM.isPending}
+              onClick={() => {
+                if (leadToDelete) singleDeleteM.mutate(leadToDelete.id);
+              }}
+            >
+              {singleDeleteM.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+              Delete Lead
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Quick Follow-Up Modal */}
       <QuickFollowUpDialog

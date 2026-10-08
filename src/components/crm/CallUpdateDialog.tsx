@@ -94,7 +94,21 @@ export function CallUpdateDialog({
         .eq("id", lead.id);
       if (lErr) throw lErr;
 
-      if (date && effectiveEmpId) {
+      if (status !== "Follow-up") {
+        // Auto-resolve any previous pending follow-ups for this lead
+        await supabase
+          .from("follow_ups")
+          .update({ is_done: true })
+          .eq("lead_id", lead.id)
+          .eq("is_done", false);
+      } else if (date && effectiveEmpId) {
+        // Resolve any previous follow-ups before creating new scheduled follow-up
+        await supabase
+          .from("follow_ups")
+          .update({ is_done: true })
+          .eq("lead_id", lead.id)
+          .eq("is_done", false);
+
         const { error: fErr } = await supabase.from("follow_ups").insert({
           lead_id: lead.id,
           company_id: lead.company_id,
@@ -102,12 +116,21 @@ export function CallUpdateDialog({
           follow_up_date: date,
           follow_up_time: time || null,
           note: notes || null,
+          is_done: false,
         });
         if (fErr) throw fErr;
       }
 
       toast.success("Call update saved");
-      await qc.invalidateQueries();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["follow-ups"] }),
+        qc.invalidateQueries({ queryKey: ["follow-up-alarms"] }),
+        qc.invalidateQueries({ queryKey: ["tasks"] }),
+        qc.invalidateQueries({ queryKey: ["my-followups-open"] }),
+        qc.invalidateQueries({ queryKey: ["my-leads"] }),
+        qc.invalidateQueries({ queryKey: ["daily-leads"] }),
+        qc.invalidateQueries({ queryKey: ["call-history", lead.id] }),
+      ]);
       onOpenChange(false);
     } catch (err) {
       const msg =

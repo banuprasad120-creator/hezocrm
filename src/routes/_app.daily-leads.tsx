@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderPlus, History, Loader2, PhoneCall, Plus, Shuffle, Upload, UserPlus, Users2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { FolderPlus, History, Loader2, PhoneCall, Plus, Shuffle, Trash2, Upload, UserPlus, Users2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LOAN_TYPES, inr, todayISO, type Lead } from "@/lib/crm";
+import { bulkPermanentDeleteLeadsServerFn, deleteFolderServerFn, permanentDeleteLeadServerFn } from "@/lib/crm.functions";
 
 
 export const Route = createFileRoute("/_app/daily-leads")({
@@ -60,6 +61,57 @@ function DailyLeads() {
   const [createLeadOpen, setCreateLeadOpen] = useState(false);
   const [unassignedOnly, setUnassignedOnly] = useState(false);
   const [page, setPage] = useState(0);
+  const [deleteFolderDialogOpen, setDeleteFolderDialogOpen] = useState(false);
+  const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+
+  const deleteFolderM = useMutation({
+    mutationFn: async (date: string) => {
+      return await deleteFolderServerFn({ data: { folderDate: date } });
+    },
+    onSuccess: (res) => {
+      toast.success(`Deleted folder ${folderDate.split("-").reverse().join("-")} and removed ${res.deletedCount} leads`);
+      setDeleteFolderDialogOpen(false);
+      qc.invalidateQueries();
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete folder");
+    },
+  });
+
+  const bulkDeleteM = useMutation({
+    mutationFn: async (ids: string[]) => {
+      return await bulkPermanentDeleteLeadsServerFn({ data: { leadIds: ids } });
+    },
+    onSuccess: (res) => {
+      toast.success(`Permanently deleted ${res.count} lead(s)`);
+      setSelected(new Set());
+      qc.invalidateQueries();
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete leads");
+    },
+  });
+
+  const singleDeleteM = useMutation({
+    mutationFn: async (leadId: string) => {
+      return await permanentDeleteLeadServerFn({ data: { leadId } });
+    },
+    onSuccess: () => {
+      toast.success("Lead permanently deleted");
+      setLeadToDelete(null);
+      qc.invalidateQueries();
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete lead");
+    },
+  });
+
+  const deleteSelected = () => {
+    if (selected.size === 0) return;
+    if (window.confirm(`Are you sure you want to permanently delete ${selected.size} selected lead(s)? This cannot be undone.`)) {
+      bulkDeleteM.mutate([...selected]);
+    }
+  };
 
 
   useEffect(() => {
@@ -303,6 +355,15 @@ function DailyLeads() {
             <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
               <Upload className="mr-1 h-4 w-4" /> Import Leads
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 text-destructive hover:bg-destructive/10 border-destructive/30"
+              onClick={() => setDeleteFolderDialogOpen(true)}
+              title="Delete all leads in this folder"
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" /> Delete Folder
+            </Button>
           </>
         }
       />
@@ -391,13 +452,27 @@ function DailyLeads() {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => { setUnassignedOnly((v) => !v); setSelected(new Set()); setPage(0); }}
-          className={`hidden rounded-lg border px-3 py-1.5 text-xs font-semibold transition touch-tap sm:inline-flex ${unassignedOnly ? "gradient-brand border-transparent text-white" : "hover:bg-muted/50"}`}
-        >
-          Unassigned only ({folderStats.unassigned})
-        </button>
+        <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || bulkDeleteM.isPending}
+              className="text-destructive hover:bg-destructive/10 border-destructive/30"
+              onClick={deleteSelected}
+            >
+              {bulkDeleteM.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
+              Delete Selected ({selected.size})
+            </Button>
+          )}
+          <button
+            type="button"
+            onClick={() => { setUnassignedOnly((v) => !v); setSelected(new Set()); setPage(0); }}
+            className={`hidden rounded-lg border px-3 py-1.5 text-xs font-semibold transition touch-tap sm:inline-flex ${unassignedOnly ? "gradient-brand border-transparent text-white" : "hover:bg-muted/50"}`}
+          >
+            Unassigned only ({folderStats.unassigned})
+          </button>
+        </div>
         {agents.length === 0 && (
           <Button asChild size="sm" variant="ghost" className="w-full sm:w-auto"><Link to="/agents"><UserPlus className="mr-1 h-4 w-4" /> Create agents first</Link></Button>
         )}
@@ -431,7 +506,7 @@ function DailyLeads() {
                   {l.city && <span className="text-muted-foreground">· {l.city}</span>}
                 </div>
 
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
                   <div className="flex-1 min-w-[130px]">
                     <Select value={l.assigned_to ?? ""} onValueChange={(v) => assign([l.id], v)}>
                       <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Assign agent" /></SelectTrigger>
@@ -440,9 +515,20 @@ function DailyLeads() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button asChild size="sm" variant="outline" className="h-8 px-2.5">
-                    <a href={`tel:${l.mobile}`} aria-label="Call"><PhoneCall className="h-3.5 w-3.5 text-brand" /></a>
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button asChild size="sm" variant="outline" className="h-8 px-2.5">
+                      <a href={`tel:${l.mobile}`} aria-label="Call"><PhoneCall className="h-3.5 w-3.5 text-brand" /></a>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                      title="Delete lead"
+                      onClick={() => setLeadToDelete(l)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -463,6 +549,7 @@ function DailyLeads() {
               <th className="px-4 py-3">Agent</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Assign</th>
+              <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -480,11 +567,22 @@ function DailyLeads() {
                 <td className="px-4 py-3"><LeadStatusBadge status={l.status} /></td>
                 <td className="px-4 py-3">
                   <Select value={l.assigned_to ?? ""} onValueChange={(v) => assign([l.id], v)}>
-                    <SelectTrigger className="h-8 w-[160px]"><SelectValue placeholder="Assign agent" /></SelectTrigger>
+                    <SelectTrigger className="h-8 w-[150px]"><SelectValue placeholder="Assign agent" /></SelectTrigger>
                     <SelectContent>
                       {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.full_name || a.email}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    title={`Delete ${l.customer_name}`}
+                    onClick={() => setLeadToDelete(l)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -495,6 +593,66 @@ function DailyLeads() {
           <p className="p-10 text-center text-sm text-muted-foreground">No leads in this folder. Add or import leads to get started.</p>
         )}
       </div>
+
+      {/* Delete Folder Dialog */}
+      <Dialog open={deleteFolderDialogOpen} onOpenChange={setDeleteFolderDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <Trash2 className="h-5 w-5" /> Delete Folder {folderDate.split("-").reverse().join("-")}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete folder <strong>{folderDate.split("-").reverse().join("-")}</strong>?
+              <br /><br />
+              This will permanently delete all <strong>{folderStats.total.toLocaleString("en-IN")}</strong> leads and their call histories in this folder. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={deleteFolderM.isPending} onClick={() => setDeleteFolderDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteFolderM.isPending}
+              onClick={() => deleteFolderM.mutate(folderDate)}
+            >
+              {deleteFolderM.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+              Yes, Delete Entire Folder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Single Lead Dialog */}
+      <Dialog open={Boolean(leadToDelete)} onOpenChange={(open) => !open && setLeadToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <Trash2 className="h-5 w-5" /> Delete Lead {leadToDelete?.customer_name}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to permanently delete <strong>{leadToDelete?.customer_name}</strong> ({leadToDelete?.mobile})?
+              <br /><br />
+              This will permanently remove this lead and all its call records.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={singleDeleteM.isPending} onClick={() => setLeadToDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={singleDeleteM.isPending}
+              onClick={() => {
+                if (leadToDelete) singleDeleteM.mutate(leadToDelete.id);
+              }}
+            >
+              {singleDeleteM.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+              Delete Lead
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {filteredCount > 0 && (
         <div className="mt-3 flex flex-col gap-2 rounded-2xl border bg-card p-3 text-xs text-muted-foreground card-elevated sm:flex-row sm:items-center sm:justify-between">
