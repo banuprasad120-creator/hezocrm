@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderPlus, History, Loader2, PhoneCall, Plus, Shuffle, Trash2, Upload, UserPlus, Users2 } from "lucide-react";
+import { FolderPlus, History, Loader2, Pause, PhoneCall, Play, Plus, Shuffle, Sparkles, Trash2, Upload, UserPlus, Users2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LOAN_TYPES, inr, todayISO, type Lead } from "@/lib/crm";
 import { bulkPermanentDeleteLeadsServerFn, deleteFolderServerFn, permanentDeleteLeadServerFn } from "@/lib/crm.functions";
+import { getCompanyBatchSettings, updateCompanyBatchSettings } from "@/lib/lead-batch";
 
 
 export const Route = createFileRoute("/_app/daily-leads")({
@@ -63,6 +64,34 @@ function DailyLeads() {
   const [page, setPage] = useState(0);
   const [deleteFolderDialogOpen, setDeleteFolderDialogOpen] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+
+  const { data: batchSettings } = useQuery({
+    queryKey: ["batch-settings", companyId],
+    enabled: Boolean(companyId),
+    queryFn: () => getCompanyBatchSettings(companyId!),
+  });
+
+  const [togglingAutoAssign, setTogglingAutoAssign] = useState(false);
+  const isAutoAssignActive = batchSettings?.enabled ?? true;
+
+  const toggleAutoAssign = async () => {
+    if (!companyId) return;
+    setTogglingAutoAssign(true);
+    const nextVal = !isAutoAssignActive;
+    try {
+      await updateCompanyBatchSettings(companyId, nextVal, batchSettings?.batchSize || 100);
+      toast.success(
+        nextVal
+          ? "⚡ Auto-Assign Started! Active agents will automatically receive batches."
+          : "⏸️ Auto-Assign Paused! Automatic distribution is now on hold."
+      );
+      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+    } catch (e) {
+      toast.error("Failed to update auto assign status", { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setTogglingAutoAssign(false);
+    }
+  };
 
   const deleteFolderM = useMutation({
     mutationFn: async (date: string) => {
@@ -343,6 +372,37 @@ function DailyLeads() {
         description={`📁 Folder ${folderDate} · ${folderStats.total.toLocaleString("en-IN")} leads · ${folderStats.assigned.toLocaleString("en-IN")} assigned`}
         actions={
           <>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={togglingAutoAssign}
+              className={`h-9 font-bold transition-all shadow-xs gap-1.5 ${
+                isAutoAssignActive
+                  ? "border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                  : "border-amber-500/50 text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20"
+              }`}
+              onClick={toggleAutoAssign}
+              title={isAutoAssignActive ? "Auto-Assign is ACTIVE. Click to Pause." : "Auto-Assign is PAUSED. Click to Start."}
+            >
+              {togglingAutoAssign ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : isAutoAssignActive ? (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <Pause className="h-3.5 w-3.5" />
+                  <span>Auto-Assign: Active (Pause)</span>
+                </>
+              ) : (
+                <>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  <Play className="h-3.5 w-3.5" />
+                  <span>Auto-Assign: Paused (Start)</span>
+                </>
+              )}
+            </Button>
             <Input type="date" value={folderDate} onChange={(e) => setFolderDate(e.target.value)} className="h-9 w-[160px]" />
             <Button
               size="sm"
@@ -367,6 +427,53 @@ function DailyLeads() {
           </>
         }
       />
+
+      {/* Auto-Assign Status Banner */}
+      <div className={`mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border p-3.5 text-xs card-elevated ${
+        isAutoAssignActive
+          ? "border-emerald-500/30 bg-emerald-500/5 text-foreground"
+          : "border-amber-500/30 bg-amber-500/5 text-foreground"
+      }`}>
+        <div className="flex items-center gap-2.5">
+          <span className={`grid h-8 w-8 place-items-center rounded-xl font-bold text-xs shrink-0 ${
+            isAutoAssignActive ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+          }`}>
+            {isAutoAssignActive ? <Sparkles className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+          </span>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-extrabold text-sm">Lead Batch Auto-Assign:</span>
+              <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold uppercase tracking-wide flex items-center gap-1 ${
+                isAutoAssignActive ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/20 text-amber-600 dark:text-amber-400"
+              }`}>
+                {isAutoAssignActive ? "🟢 RUNNING (ACTIVE)" : "⏸️ PAUSED (STOPPED)"}
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              {isAutoAssignActive
+                ? `Active calling agents will automatically receive batches of ${batchSettings?.batchSize || 100} leads as they finish calls.`
+                : "Automatic lead allocation is currently paused. No new batches are given out until started."}
+            </p>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant={isAutoAssignActive ? "outline" : "default"}
+          disabled={togglingAutoAssign}
+          className={`h-8 shrink-0 text-xs font-bold gap-1.5 shadow-xs ${
+            isAutoAssignActive
+              ? "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              : "gradient-brand text-white"
+          }`}
+          onClick={toggleAutoAssign}
+        >
+          {isAutoAssignActive ? (
+            <><Pause className="h-3.5 w-3.5" /> Pause Auto-Assign</>
+          ) : (
+            <><Play className="h-3.5 w-3.5" /> Start Auto-Assign</>
+          )}
+        </Button>
+      </div>
 
       <ImportLeadsWizard
         open={importOpen}

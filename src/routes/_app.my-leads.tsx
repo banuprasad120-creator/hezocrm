@@ -413,8 +413,16 @@ function MyLeads() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground font-semibold">⚡ Auto-Refill:</span>
-            <Switch checked={autoRefill} onCheckedChange={setAutoRefill} className="scale-75" />
+            {!isAutomationEnabled ? (
+              <span className="rounded-full px-2.5 py-1 text-xs font-extrabold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                ⏸️ Auto-Assign Paused by Admin
+              </span>
+            ) : (
+              <>
+                <span className="text-xs text-muted-foreground font-semibold">⚡ Auto-Refill:</span>
+                <Switch checked={autoRefill} onCheckedChange={setAutoRefill} className="scale-75" />
+              </>
+            )}
           </div>
         </div>
 

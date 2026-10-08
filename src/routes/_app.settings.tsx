@@ -16,7 +16,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime } from "@/lib/crm";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Sparkles, Zap, ShieldCheck, PlayCircle } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles, Zap, ShieldCheck, PlayCircle, Pause, Play } from "lucide-react";
 
 export const Route = createFileRoute("/_app/settings")({
   head: () => ({ meta: [{ title: "Settings — Hezo CRM" }, { name: "description", content: "Company, theme, lead batch allocation and notification preferences." }] }),
@@ -162,14 +162,34 @@ function SettingsPage() {
             </div>
 
             <Row
-              label="Lead Batch Automation"
-              hint="When ON, active agents automatically receive their next batch when their pending queue reaches 0."
+              label="Lead Batch Auto-Assign"
+              hint="When started (RUNNING), active agents automatically receive their next batch when their pending queue reaches 0."
               control={
-                <Switch
-                  checked={automationEnabled}
-                  onCheckedChange={setAutomationEnabled}
-                  disabled={!isAdmin || batchLoading}
-                />
+                <div className="flex items-center gap-3">
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-extrabold flex items-center gap-1.5 ${
+                    automationEnabled
+                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                      : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                  }`}>
+                    {automationEnabled ? <Sparkles className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+                    {automationEnabled ? "🟢 RUNNING (ACTIVE)" : "⏸️ PAUSED (STOPPED)"}
+                  </span>
+                  <Switch
+                    checked={automationEnabled}
+                    onCheckedChange={(val) => {
+                      setAutomationEnabled(val);
+                      if (companyId) {
+                        updateCompanyBatchSettings(companyId, val, Number(batchSize) || 100)
+                          .then(() => {
+                            toast.success(val ? "⚡ Auto-Assign Started!" : "⏸️ Auto-Assign Paused!");
+                            qc.invalidateQueries({ queryKey: ["batch-settings"] });
+                          })
+                          .catch((e) => toast.error(e?.message || "Failed to update Auto-Assign"));
+                      }
+                    }}
+                    disabled={!isAdmin || batchLoading}
+                  />
+                </div>
               }
             />
 

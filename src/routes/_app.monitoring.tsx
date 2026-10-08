@@ -10,9 +10,12 @@ import {
   Clock,
   Filter,
   FolderPlus,
+  Loader2,
+  Pause,
   Phone,
   PhoneCall,
   PhoneForwarded,
+  Play,
   Plus,
   RefreshCw,
   Sparkles,
@@ -24,6 +27,7 @@ import {
   WifiOff,
   Zap,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { StatCard } from "@/components/common/StatCard";
 import { Button } from "@/components/ui/button";
@@ -35,6 +39,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
 import { cn } from "@/lib/utils";
+import { getCompanyBatchSettings, updateCompanyBatchSettings } from "@/lib/lead-batch";
 
 export const Route = createFileRoute("/_app/monitoring")({
   head: () => ({
@@ -74,6 +79,34 @@ function Monitoring() {
   const [typeFilter, setTypeFilter] = useState<string>(ALL);
   const [importOpen, setImportOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const { data: batchSettings } = useQuery({
+    queryKey: ["batch-settings", companyId],
+    enabled: Boolean(companyId),
+    queryFn: () => getCompanyBatchSettings(companyId!),
+  });
+
+  const [togglingAutoAssign, setTogglingAutoAssign] = useState(false);
+  const isAutoAssignActive = batchSettings?.enabled ?? true;
+
+  const toggleAutoAssign = async () => {
+    if (!companyId) return;
+    setTogglingAutoAssign(true);
+    const nextVal = !isAutoAssignActive;
+    try {
+      await updateCompanyBatchSettings(companyId, nextVal, batchSettings?.batchSize || 100);
+      toast.success(
+        nextVal
+          ? "⚡ Auto-Assign Started! Active agents will automatically receive batches."
+          : "⏸️ Auto-Assign Paused! Automatic distribution is now on hold."
+      );
+      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+    } catch (e) {
+      toast.error("Failed to update Auto-Assign state", { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setTogglingAutoAssign(false);
+    }
+  };
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
@@ -291,6 +324,37 @@ function Monitoring() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={togglingAutoAssign}
+              className={`h-9 font-bold transition-all shadow-xs gap-1.5 ${
+                isAutoAssignActive
+                  ? "border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                  : "border-amber-500/50 text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20"
+              }`}
+              onClick={toggleAutoAssign}
+              title={isAutoAssignActive ? "Auto-Assign is ACTIVE. Click to Pause." : "Auto-Assign is PAUSED. Click to Start."}
+            >
+              {togglingAutoAssign ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : isAutoAssignActive ? (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <Pause className="h-3.5 w-3.5" />
+                  <span>Auto-Assign: Active (Pause)</span>
+                </>
+              ) : (
+                <>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  <Play className="h-3.5 w-3.5" />
+                  <span>Auto-Assign: Paused (Start)</span>
+                </>
+              )}
+            </Button>
             <Button
               variant="outline"
               size="sm"
