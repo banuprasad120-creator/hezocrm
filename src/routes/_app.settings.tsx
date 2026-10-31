@@ -13,6 +13,7 @@ import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import {
   getCompanyBatchSettings, updateCompanyBatchSettings, getBatchAuditLogs, allocateNextLeadBatch, type LeadBatch,
 } from "@/lib/lead-batch";
+import { AutoAssignControls } from "@/components/crm/AutoAssignControls";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime } from "@/lib/crm";
 import { toast } from "sonner";
@@ -161,37 +162,7 @@ function SettingsPage() {
               </p>
             </div>
 
-            <Row
-              label="Lead Batch Auto-Assign"
-              hint="When started (RUNNING), active agents automatically receive their next batch when their pending queue reaches 0."
-              control={
-                <div className="flex items-center gap-3">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-extrabold flex items-center gap-1.5 ${
-                    automationEnabled
-                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
-                      : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
-                  }`}>
-                    {automationEnabled ? <Sparkles className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-                    {automationEnabled ? "🟢 RUNNING (ACTIVE)" : "⏸️ PAUSED (STOPPED)"}
-                  </span>
-                  <Switch
-                    checked={automationEnabled}
-                    onCheckedChange={(val) => {
-                      setAutomationEnabled(val);
-                      if (companyId) {
-                        updateCompanyBatchSettings(companyId, val, Number(batchSize) || 100)
-                          .then(() => {
-                            toast.success(val ? "⚡ Auto-Assign Started!" : "⏸️ Auto-Assign Paused!");
-                            qc.invalidateQueries({ queryKey: ["batch-settings"] });
-                          })
-                          .catch((e) => toast.error(e?.message || "Failed to update Auto-Assign"));
-                      }
-                    }}
-                    disabled={!isAdmin || batchLoading}
-                  />
-                </div>
-              }
-            />
+            {companyId && <AutoAssignControls companyId={companyId} variant="card" />}
 
             <Row
               label="Agent Lead Batch Size"
@@ -199,7 +170,17 @@ function SettingsPage() {
               control={
                 <Select
                   value={batchSize}
-                  onValueChange={setBatchSize}
+                  onValueChange={(val) => {
+                    setBatchSize(val);
+                    if (companyId) {
+                      updateCompanyBatchSettings(companyId, automationEnabled, Number(val) || 100)
+                        .then(() => {
+                          toast.success(`Batch size updated to ${val} leads per agent`);
+                          qc.invalidateQueries({ queryKey: ["batch-settings"] });
+                        })
+                        .catch((e) => toast.error(e?.message || "Failed to update batch size"));
+                    }
+                  }}
                   disabled={!isAdmin || batchLoading}
                 >
                   <SelectTrigger className="w-40 font-bold"><SelectValue /></SelectTrigger>

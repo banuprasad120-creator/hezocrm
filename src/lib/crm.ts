@@ -56,6 +56,26 @@ export function statusTone(status: LeadStatus): string {
   }
 }
 
+export type LeadPriority = "HIGH" | "MEDIUM" | "LOW";
+
+export const PRIORITY_LEVELS: { value: LeadPriority; label: string; desc: string }[] = [
+  { value: "HIGH", label: "HIGH", desc: "Interested, urgent enquiry, immediate follow-up" },
+  { value: "MEDIUM", label: "MEDIUM", desc: "Follow-up required or more information" },
+  { value: "LOW", label: "LOW", desc: "New enquiry without confirmed interest" },
+];
+
+export function priorityTone(priority?: string | null): string {
+  switch (priority?.toUpperCase()) {
+    case "HIGH":
+      return "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30";
+    case "MEDIUM":
+      return "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30";
+    case "LOW":
+    default:
+      return "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30";
+  }
+}
+
 export function inr(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 }

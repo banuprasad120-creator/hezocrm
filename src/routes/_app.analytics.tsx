@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Download, Eye, Flame, MessageCircle, Phone, PhoneCall, Search,
+  Download, Eye, FileSpreadsheet, Flame, MessageCircle, Phone, PhoneCall, Search,
   TrendingUp, Users, ShieldCheck, User, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, CUSTOMER_RESPONSES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
 import { parseInterestedData } from "@/lib/interested-lead";
+import { exportToExcel, exportToCsv } from "@/lib/export-utils";
 
 export const Route = createFileRoute("/_app/analytics")({
   head: () => ({
@@ -177,44 +178,37 @@ function AnalyticsPage() {
 
   const conversion = data && data.totalLeads > 0 ? ((data.interested / data.totalLeads) * 100).toFixed(1) : "0.0";
 
-  const exportReport = () => {
+  const exportConnectedCalls = (format: "xlsx" | "csv") => {
     if (filteredConnectedCalls.length === 0) {
       toast.info("No connected call records to export");
       return;
     }
 
-    const headers = [
-      "Customer Name", "Mobile", "Agent", "Customer Response", "Status",
-      "Loan Required", "Amount", "CIBIL Score", "Salary Bank", "Call Notes", "Call Date & Time",
-    ];
-
     const rows = filteredConnectedCalls.map((c) => {
       const l = c.leads;
       const intData = parseInterestedData(l?.notes);
-      return [
-        `"${(l?.customer_name || "").replace(/"/g, '""')}"`,
-        `"${l?.mobile || ""}"`,
-        `"${agentMap.get(c.employee_id) || "Agent"}"`,
-        `"${c.customer_response || ""}"`,
-        `"${c.status}"`,
-        `"${l?.loan_type || ""}"`,
-        `"${l?.loan_amount || ""}"`,
-        `"${intData?.cibilScore || ""}"`,
-        `"${intData?.salaryBank || ""}"`,
-        `"${(c.notes || "").replace(/"/g, '""')}"`,
-        `"${formatDateTime(c.called_at)}"`,
-      ].join(",");
+      return {
+        "Customer Name": l?.customer_name || "",
+        "Mobile": l?.mobile || "",
+        "Agent": agentMap.get(c.employee_id) || "Agent",
+        "Customer Response": c.customer_response || "",
+        "Status": c.status,
+        "Loan Required": l?.loan_type || "",
+        "Amount": l?.loan_amount || "",
+        "CIBIL Score": intData?.cibilScore || "",
+        "Salary Bank": intData?.salaryBank || "",
+        "Call Notes": c.notes || "",
+        "Call Date & Time": formatDateTime(c.called_at),
+      };
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Connected_Calls_Report_${todayISO()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success("Connected calls report exported successfully!");
+    const filename = `Connected_Calls_Report_${todayISO()}`;
+    if (format === "xlsx") {
+      exportToExcel(rows, filename, "Connected Calls");
+    } else {
+      exportToCsv(rows, filename);
+    }
+    toast.success(`Connected calls report exported as ${format.toUpperCase()}`);
   };
 
   return (
@@ -232,8 +226,25 @@ function AnalyticsPage() {
                 <SelectItem value="30">Last 30 days</SelectItem>
               </SelectContent>
             </Select>
-            <Button size="sm" variant="outline" className="h-9 text-xs sm:text-sm font-semibold" onClick={exportReport}>
-              <Download className="mr-1 h-3.5 w-3.5" /> Export Connected List
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 text-xs font-semibold gap-1.5"
+              onClick={() => exportConnectedCalls("xlsx")}
+              title="Export connected calls as Excel"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+              <span>Export Excel</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 text-xs font-semibold gap-1.5"
+              onClick={() => exportConnectedCalls("csv")}
+              title="Export connected calls as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>CSV</span>
             </Button>
           </div>
         }

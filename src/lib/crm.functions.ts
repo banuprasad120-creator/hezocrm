@@ -117,7 +117,7 @@ export const updateAgentPhone = createServerFn({ method: "POST" })
 
 const createLeadSchema = z.object({
   companyId: z.string().optional().nullable(),
-  customerName: z.string().min(1),
+  customerName: z.string().optional().nullable().transform((v) => (v && v.trim()) ? v.trim() : "Customer"),
   mobile: z.string().min(6),
   city: z.string().optional().nullable(),
   loanType: z.string().default("Personal Loan"),
@@ -129,7 +129,45 @@ const createLeadSchema = z.object({
   folderDate: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   assignedTo: z.string().optional().nullable(),
+  priority: z.enum(["HIGH", "MEDIUM", "LOW"]).default("LOW"),
 });
+
+/** Allows company admins to update a lead's priority (HIGH / MEDIUM / LOW) */
+const updateLeadPrioritySchema = z.object({
+  leadId: z.string(),
+  priority: z.enum(["HIGH", "MEDIUM", "LOW"]),
+});
+
+export const updateLeadPriorityServerFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => updateLeadPrioritySchema.parse(input))
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: userProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("company_id")
+      .eq("id", context.userId)
+      .maybeSingle();
+
+    const { data: lead, error: fetchErr } = await supabaseAdmin
+      .from("leads")
+      .select("id, company_id, priority, customer_name")
+      .eq("id", data.leadId)
+      .single();
+
+    if (fetchErr || !lead) throw new Error("Lead not found");
+    if (userProfile?.company_id && lead.company_id !== userProfile.company_id) {
+      throw new Error("Unauthorized to modify this lead");
+    }
+
+    const { error: updateErr } = await supabaseAdmin
+      .from("leads")
+      .update({ priority: data.priority, updated_at: new Date().toISOString() })
+      .eq("id", data.leadId);
+
+    if (updateErr) throw new Error(updateErr.message);
+    return { success: true, leadId: data.leadId, priority: data.priority };
+  });
 
 /** Securely creates a lead for admins or agents, bypassing client RLS */
 export const createLeadServerFn = createServerFn({ method: "POST" })
@@ -165,7 +203,24 @@ export const createLeadServerFn = createServerFn({ method: "POST" })
     const isAssigned = Boolean(finalAssignedTo);
     const now = new Date().toISOString();
     const cleanMobile = data.mobile.replace(/\D/g, "");
+    if (cleanMobile.length !== 10 || !/^[6-9]\d{9}$/.test(cleanMobile)) {
+      throw new Error("Invalid mobile number. Must be a 10-digit Indian mobile starting with 6, 7, 8, or 9.");
+    }
     const folderDate = data.folderDate || now.slice(0, 10);
+
+    // Strict duplicate check: mobile must not exist in this company
+    const { data: existingLead } = await supabaseAdmin
+      .from("leads")
+      .select("id, customer_name, status, folder_date")
+      .eq("company_id", companyId)
+      .eq("mobile", cleanMobile)
+      .maybeSingle();
+
+    if (existingLead) {
+      throw new Error(
+        `Duplicate Lead Rejected: Mobile ${cleanMobile} already exists for "${existingLead.customer_name}" (Status: ${existingLead.status}, Folder: ${existingLead.folder_date}).`
+      );
+    }
 
     const { data: newLead, error: leadErr } = await supabaseAdmin
       .from("leads")
@@ -181,6 +236,7 @@ export const createLeadServerFn = createServerFn({ method: "POST" })
         employment_type: data.employmentType || "Salaried",
         source: data.source || "External Lead / Direct",
         folder_date: folderDate,
+        priority: data.priority,
         status: isAssigned ? "Assigned" : "New",
         assigned_to: finalAssignedTo,
         assigned_at: isAssigned ? now : null,

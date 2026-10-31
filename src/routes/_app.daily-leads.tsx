@@ -1,7 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderPlus, History, Loader2, Pause, PhoneCall, Play, Plus, Shuffle, Sparkles, Trash2, Upload, UserPlus, Users2 } from "lucide-react";
+import {
+  Activity, AlertCircle, Clock, Download, FileSpreadsheet, Flame, FolderPlus, History, Inbox, Layers, Loader2,
+  PhoneCall, Plus, Shuffle, Trash2, Upload, UserCheck, UserPlus, Users2, Zap
+} from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -13,11 +16,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
+import { AutoAssignControls } from "@/components/crm/AutoAssignControls";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
-import { CONTACTED_STATUSES, LOAN_TYPES, inr, todayISO, type Lead } from "@/lib/crm";
-import { bulkPermanentDeleteLeadsServerFn, deleteFolderServerFn, permanentDeleteLeadServerFn } from "@/lib/crm.functions";
-import { getCompanyBatchSettings, updateCompanyBatchSettings } from "@/lib/lead-batch";
+import { CONTACTED_STATUSES, LOAN_TYPES, inr, todayISO, priorityTone, type Lead, type LeadPriority } from "@/lib/crm";
+import { bulkPermanentDeleteLeadsServerFn, deleteFolderServerFn, permanentDeleteLeadServerFn, updateLeadPriorityServerFn } from "@/lib/crm.functions";
+import { getCompanyBatchSettings, distributeLeadsEqually } from "@/lib/lead-batch";
+import { exportToExcel, exportToCsv } from "@/lib/export-utils";
 
 
 export const Route = createFileRoute("/_app/daily-leads")({
@@ -71,25 +76,53 @@ function DailyLeads() {
     queryFn: () => getCompanyBatchSettings(companyId!),
   });
 
-  const [togglingAutoAssign, setTogglingAutoAssign] = useState(false);
-  const isAutoAssignActive = batchSettings?.enabled ?? true;
-
-  const toggleAutoAssign = async () => {
+  const exportFolder = async (format: "xlsx" | "csv") => {
     if (!companyId) return;
-    setTogglingAutoAssign(true);
-    const nextVal = !isAutoAssignActive;
+    setBusy(true);
     try {
-      await updateCompanyBatchSettings(companyId, nextVal, batchSettings?.batchSize || 100);
-      toast.success(
-        nextVal
-          ? "⚡ Auto-Assign Started! Active agents will automatically receive batches."
-          : "⏸️ Auto-Assign Paused! Automatic distribution is now on hold."
-      );
-      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+      const { data: leadsToExport, error } = await supabase
+        .from("leads")
+        .select("customer_name, mobile, alternate_mobile, status, priority, city, state, loan_amount, loan_type, source, folder_date, last_call_at, notes, profiles:assigned_to(full_name, email)")
+        .eq("company_id", companyId)
+        .eq("folder_date", folderDate)
+        .order("created_at", { ascending: true })
+        .limit(10000);
+
+      if (error) throw error;
+      if (!leadsToExport || leadsToExport.length === 0) {
+        toast.info("No leads in this folder to export");
+        return;
+      }
+
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const rows = leadsToExport.map((l: any) => ({
+        "Customer Name": l.customer_name,
+        "Mobile": l.mobile,
+        "Alternate Mobile": l.alternate_mobile || "",
+        "Priority": l.priority || "LOW",
+        "Status": l.status,
+        "Assigned To": l.profiles?.full_name || l.profiles?.email || "Unassigned",
+        "City": l.city || "",
+        "State": l.state || "",
+        "Loan Amount": l.loan_amount || "",
+        "Loan Type": l.loan_type || "",
+        "Lead Source": l.source || "",
+        "Folder Date": l.folder_date,
+        "Last Call At": l.last_call_at || "",
+        "Notes": l.notes || "",
+      }));
+
+      const filename = `Leads_${folderDate}`;
+      if (format === "xlsx") {
+        exportToExcel(rows, filename, `Folder ${folderDate}`);
+      } else {
+        exportToCsv(rows, filename);
+      }
+      toast.success(`Exported ${rows.length} leads from folder ${folderDate} as ${format.toUpperCase()}`);
     } catch (e) {
-      toast.error("Failed to update auto assign status", { description: e instanceof Error ? e.message : undefined });
+      toast.error("Export failed", { description: e instanceof Error ? e.message : undefined });
     } finally {
-      setTogglingAutoAssign(false);
+      setBusy(false);
     }
   };
 
@@ -149,18 +182,53 @@ function DailyLeads() {
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
+  // Priority update mutation
+  const updatePriorityM = useMutation({
+    mutationFn: async ({ leadId, priority }: { leadId: string; priority: LeadPriority }) => {
+      return await updateLeadPriorityServerFn({ data: { leadId, priority } });
+    },
+    onSuccess: (res) => {
+      toast.success(`Priority updated to ${res.priority}`);
+      qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update priority");
+    },
+  });
+
+  const { data: companyRecord } = useQuery({
+    queryKey: ["company-auto-assign-status", companyId],
+    enabled: Boolean(companyId),
+    refetchInterval: 5000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("companies")
+        .select("auto_assign_status, agent_lead_batch_size")
+        .eq("id", companyId!)
+        .maybeSingle();
+      return data;
+    },
+  });
+  const autoAssignStatus = companyRecord?.auto_assign_status || "RUNNING";
+
   // Counts come from head-only count queries so folders with 10,000+ leads stay instant.
-  const { data: folderStats = { total: 0, assigned: 0, unassigned: 0, called: 0, pending: 0 } } = useQuery({
+  const { data: folderStats = { total: 0, assigned: 0, unassigned: 0, called: 0, pending: 0, highWaiting: 0, medWaiting: 0, lowWaiting: 0 } } = useQuery({
     queryKey: ["daily-lead-stats", companyId, folderDate],
     enabled: Boolean(companyId) && isAdmin,
+    refetchInterval: 5000,
     queryFn: async () => {
       try {
         const base = () => supabase.from("leads").select("id", { count: "exact", head: true })
           .eq("company_id", companyId!).eq("folder_date", folderDate);
-        const [{ count: total }, { count: assigned }, { count: called }] = await Promise.all([
+        const unassignedBase = () => base().is("assigned_to", null).eq("status", "New");
+        const [{ count: total }, { count: assigned }, { count: called }, { count: highWaiting }, { count: medWaiting }, { count: lowWaiting }] = await Promise.all([
           base(),
           base().not("assigned_to", "is", null),
           base().in("status", [...CONTACTED_STATUSES]),
+          unassignedBase().eq("priority", "HIGH"),
+          unassignedBase().eq("priority", "MEDIUM"),
+          unassignedBase().eq("priority", "LOW"),
         ]);
         return {
           total: total ?? 0,
@@ -168,10 +236,13 @@ function DailyLeads() {
           unassigned: (total ?? 0) - (assigned ?? 0),
           called: called ?? 0,
           pending: (total ?? 0) - (called ?? 0),
+          highWaiting: highWaiting ?? 0,
+          medWaiting: medWaiting ?? 0,
+          lowWaiting: lowWaiting ?? 0,
         };
       } catch (err) {
         console.warn("[folderStats] fetch error:", err);
-        return { total: 0, assigned: 0, unassigned: 0, called: 0, pending: 0 };
+        return { total: 0, assigned: 0, unassigned: 0, called: 0, pending: 0, highWaiting: 0, medWaiting: 0, lowWaiting: 0 };
       }
     },
   });
@@ -323,39 +394,32 @@ function DailyLeads() {
 
   const distributeEqually = async () => {
     const active = agents.filter((a) => a.is_active);
-    if (active.length === 0) return toast.error("No active agents");
+    if (active.length === 0) return toast.error("No active agents found in company");
+    if (!companyId) return;
     setBusy(true);
     try {
-      let pool: string[] = [];
       if (selected.size > 0) {
-        // Fetch mobile numbers for selected leads to deduplicate
-        const { data: selLeads } = await supabase.from("leads").select("id, mobile").in("id", [...selected]);
-        const seen = new Set<string>();
-        for (const l of selLeads ?? []) {
-          const cleanMobile = (l.mobile || "").replace(/\D/g, "").slice(-10);
-          if (cleanMobile) {
-            if (!seen.has(cleanMobile)) {
-              seen.add(cleanMobile);
-              pool.push(l.id);
-            }
-          } else {
-            pool.push(l.id);
-          }
+        // Distribute selected leads
+        const pool = [...selected];
+        const now = new Date().toISOString();
+        for (let i = 0; i < active.length; i++) {
+          const agent = active[i]!;
+          const ids = pool.filter((_, idx) => idx % active.length === i);
+          if (ids.length === 0) continue;
+          await assignChunked(ids, agent.id, now);
         }
+        toast.success(`${pool.length} selected leads distributed across ${active.length} agents`);
+        setSelected(new Set());
       } else {
-        pool = await fetchFolderLeadIds();
+        // Use atomic PostgreSQL RPC for equal distribution with row locks & audit logging
+        const perAgent = batchSettings?.batchSize || 100;
+        const res = await distributeLeadsEqually(companyId, active.map((a) => a.id), perAgent, folderDate);
+        if (!res.success) {
+          toast.error(res.message);
+        } else {
+          toast.success(res.message);
+        }
       }
-
-      if (pool.length === 0) { toast.error("No unassigned unique leads to distribute"); return; }
-      const now = new Date().toISOString();
-      for (let i = 0; i < active.length; i++) {
-        const agent = active[i]!;
-        const ids = pool.filter((_, idx) => idx % active.length === i);
-        if (ids.length === 0) continue;
-        await assignChunked(ids, agent.id, now);
-      }
-      toast.success(`${pool.length} unique leads distributed across ${active.length} agents`);
-      setSelected(new Set());
       qc.invalidateQueries();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Distribution failed");
@@ -364,55 +428,49 @@ function DailyLeads() {
     }
   };
 
-
   return (
     <>
       <PageHeader
         title="Daily Leads"
         description={`📁 Folder ${folderDate} · ${folderStats.total.toLocaleString("en-IN")} leads · ${folderStats.assigned.toLocaleString("en-IN")} assigned`}
         actions={
-          <>
+          <div className="flex flex-wrap items-center gap-2">
+            {companyId && <AutoAssignControls companyId={companyId} />}
+            <Input
+              type="date"
+              value={folderDate}
+              onChange={(e) => setFolderDate(e.target.value)}
+              className="h-9 w-[150px] text-xs font-semibold"
+            />
             <Button
               size="sm"
               variant="outline"
-              disabled={togglingAutoAssign}
-              className={`h-9 font-bold transition-all shadow-xs gap-1.5 ${
-                isAutoAssignActive
-                  ? "border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
-                  : "border-amber-500/50 text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20"
-              }`}
-              onClick={toggleAutoAssign}
-              title={isAutoAssignActive ? "Auto-Assign is ACTIVE. Click to Pause." : "Auto-Assign is PAUSED. Click to Start."}
+              className="h-9 gap-1 text-xs font-semibold"
+              onClick={() => exportFolder("xlsx")}
+              title="Export folder leads as formatted Excel spreadsheet"
             >
-              {togglingAutoAssign ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : isAutoAssignActive ? (
-                <>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <Pause className="h-3.5 w-3.5" />
-                  <span>Auto-Assign: Active (Pause)</span>
-                </>
-              ) : (
-                <>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                  <Play className="h-3.5 w-3.5" />
-                  <span>Auto-Assign: Paused (Start)</span>
-                </>
-              )}
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Export Excel</span>
             </Button>
-            <Input type="date" value={folderDate} onChange={(e) => setFolderDate(e.target.value)} className="h-9 w-[160px]" />
             <Button
               size="sm"
-              className="gradient-brand text-white font-bold gap-1 shadow-xs"
+              variant="outline"
+              className="h-9 gap-1 text-xs font-semibold"
+              onClick={() => exportFolder("csv")}
+              title="Export folder leads as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">CSV</span>
+            </Button>
+            <Button
+              size="sm"
+              className="gradient-brand text-white font-bold gap-1 shadow-xs h-9"
               onClick={() => setCreateLeadOpen(true)}
             >
               <UserPlus className="h-4 w-4" />
               <span>+ Add Lead</span>
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+            <Button size="sm" variant="outline" className="h-9" onClick={() => setImportOpen(true)}>
               <Upload className="mr-1 h-4 w-4" /> Import Leads
             </Button>
             <Button
@@ -424,56 +482,9 @@ function DailyLeads() {
             >
               <Trash2 className="mr-1.5 h-4 w-4" /> Delete Folder
             </Button>
-          </>
+          </div>
         }
       />
-
-      {/* Auto-Assign Status Banner */}
-      <div className={`mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border p-3.5 text-xs card-elevated ${
-        isAutoAssignActive
-          ? "border-emerald-500/30 bg-emerald-500/5 text-foreground"
-          : "border-amber-500/30 bg-amber-500/5 text-foreground"
-      }`}>
-        <div className="flex items-center gap-2.5">
-          <span className={`grid h-8 w-8 place-items-center rounded-xl font-bold text-xs shrink-0 ${
-            isAutoAssignActive ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-          }`}>
-            {isAutoAssignActive ? <Sparkles className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-          </span>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-extrabold text-sm">Lead Batch Auto-Assign:</span>
-              <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold uppercase tracking-wide flex items-center gap-1 ${
-                isAutoAssignActive ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/20 text-amber-600 dark:text-amber-400"
-              }`}>
-                {isAutoAssignActive ? "🟢 RUNNING (ACTIVE)" : "⏸️ PAUSED (STOPPED)"}
-              </span>
-            </div>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {isAutoAssignActive
-                ? `Active calling agents will automatically receive batches of ${batchSettings?.batchSize || 100} leads as they finish calls.`
-                : "Automatic lead allocation is currently paused. No new batches are given out until started."}
-            </p>
-          </div>
-        </div>
-        <Button
-          size="sm"
-          variant={isAutoAssignActive ? "outline" : "default"}
-          disabled={togglingAutoAssign}
-          className={`h-8 shrink-0 text-xs font-bold gap-1.5 shadow-xs ${
-            isAutoAssignActive
-              ? "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-              : "gradient-brand text-white"
-          }`}
-          onClick={toggleAutoAssign}
-        >
-          {isAutoAssignActive ? (
-            <><Pause className="h-3.5 w-3.5" /> Pause Auto-Assign</>
-          ) : (
-            <><Play className="h-3.5 w-3.5" /> Start Auto-Assign</>
-          )}
-        </Button>
-      </div>
 
       <ImportLeadsWizard
         open={importOpen}
@@ -515,19 +526,155 @@ function DailyLeads() {
         )}
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
-        {([
-          ["Total Leads", folderStats.total],
-          ["Assigned", folderStats.assigned],
-          ["Unassigned", folderStats.unassigned],
-          ["Called", folderStats.called],
-          ["Pending", folderStats.pending],
-        ] as const).map(([label, value]) => (
-          <div key={label} className="rounded-2xl border bg-card p-3.5 card-elevated sm:p-4">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:text-[11px]">{label}</p>
-            <p className="mt-1 truncate text-xl font-extrabold sm:text-2xl">{value.toLocaleString("en-IN")}</p>
+      {/* ── LIVE PRIORITY QUEUE INDICATOR ── */}
+      <div className="mb-4 rounded-2xl border bg-gradient-to-r from-card via-card to-primary/5 p-4 card-elevated">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Activity className="h-4 w-4 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-extrabold tracking-tight">Live Priority Queue</h3>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10.5px] font-bold border ${
+                  autoAssignStatus === "RUNNING"
+                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+                    : autoAssignStatus === "PAUSED"
+                    ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                    : "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30"
+                }`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${
+                    autoAssignStatus === "RUNNING" ? "bg-emerald-500 animate-ping" : autoAssignStatus === "PAUSED" ? "bg-amber-500" : "bg-slate-400"
+                  }`} />
+                  {autoAssignStatus === "RUNNING" ? "Live Auto-Assign Running" : autoAssignStatus === "PAUSED" ? "Auto-Assign Paused" : "Auto-Assign Stopped"}
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {autoAssignStatus === "RUNNING"
+                  ? "New leads are auto-prioritized (HIGH first) and dispatched to active agents without interrupting ongoing calls."
+                  : autoAssignStatus === "PAUSED"
+                  ? "Queue paused. New uploads are safely saved with priority without auto-assigning."
+                  : "Queue stopped. Click Start in controls above to resume automatic distribution."}
+              </p>
+            </div>
           </div>
-        ))}
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="gradient-brand text-white shadow-xs"
+              onClick={() => setImportOpen(true)}
+            >
+              <Upload className="mr-1.5 h-3.5 w-3.5" />
+              Upload More Leads
+            </Button>
+          </div>
+        </div>
+
+        {/* Live Priority Breakdown Grid */}
+        <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
+            <div className="flex items-center justify-between text-rose-600 dark:text-rose-400">
+              <span className="text-[10px] font-bold uppercase tracking-wider">High Priority</span>
+              <Flame className="h-3.5 w-3.5" />
+            </div>
+            <p className="mt-1 text-xl font-extrabold text-rose-600 dark:text-rose-400">
+              {folderStats.highWaiting.toLocaleString("en-IN")}
+            </p>
+            <span className="text-[10px] font-medium text-muted-foreground">Front of Queue</span>
+          </div>
+
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+            <div className="flex items-center justify-between text-amber-600 dark:text-amber-400">
+              <span className="text-[10px] font-bold uppercase tracking-wider">Medium Priority</span>
+              <AlertCircle className="h-3.5 w-3.5" />
+            </div>
+            <p className="mt-1 text-xl font-extrabold text-amber-600 dark:text-amber-400">
+              {folderStats.medWaiting.toLocaleString("en-IN")}
+            </p>
+            <span className="text-[10px] font-medium text-muted-foreground">Follow-up Leads</span>
+          </div>
+
+          <div className="rounded-xl border border-slate-500/30 bg-slate-500/5 p-3">
+            <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+              <span className="text-[10px] font-bold uppercase tracking-wider">Low Priority</span>
+              <Clock className="h-3.5 w-3.5" />
+            </div>
+            <p className="mt-1 text-xl font-extrabold text-slate-600 dark:text-slate-400">
+              {folderStats.lowWaiting.toLocaleString("en-IN")}
+            </p>
+            <span className="text-[10px] font-medium text-muted-foreground">Standard Leads</span>
+          </div>
+
+          <div className="rounded-xl border bg-elevated p-3">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[10px] font-bold uppercase tracking-wider">Unassigned Waiting</span>
+              <Inbox className="h-3.5 w-3.5 text-primary" />
+            </div>
+            <p className="mt-1 text-xl font-extrabold text-foreground">
+              {folderStats.unassigned.toLocaleString("en-IN")}
+            </p>
+            <span className="text-[10px] font-medium text-muted-foreground">Ready for Calling</span>
+          </div>
+
+          <div className="rounded-xl border bg-elevated p-3">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[10px] font-bold uppercase tracking-wider">Total Assigned</span>
+              <UserCheck className="h-3.5 w-3.5 text-success" />
+            </div>
+            <p className="mt-1 text-xl font-extrabold text-success">
+              {folderStats.assigned.toLocaleString("en-IN")}
+            </p>
+            <span className="text-[10px] font-medium text-muted-foreground">Active Workload</span>
+          </div>
+
+          <div className="rounded-xl border bg-elevated p-3">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[10px] font-bold uppercase tracking-wider">Folder Total</span>
+              <Layers className="h-3.5 w-3.5 text-brand" />
+            </div>
+            <p className="mt-1 text-xl font-extrabold text-foreground">
+              {folderStats.total.toLocaleString("en-IN")}
+            </p>
+            <span className="text-[10px] font-medium text-muted-foreground">All Leads in Folder</span>
+          </div>
+        </div>
+      </div>
+
+      {/* View Switcher Tabs (All Leads vs Unassigned Queue) */}
+      <div className="mb-3 flex items-center justify-between border-b pb-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { setUnassignedOnly(false); setSelected(new Set()); setPage(0); }}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              !unassignedOnly
+                ? "bg-brand text-white shadow-xs"
+                : "bg-card border text-muted-foreground hover:bg-muted/50"
+            }`}
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>All Folder Leads ({folderStats.total.toLocaleString("en-IN")})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => { setUnassignedOnly(true); setSelected(new Set()); setPage(0); }}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              unassignedOnly
+                ? "gradient-brand text-white shadow-xs"
+                : "bg-card border text-muted-foreground hover:bg-muted/50"
+            }`}
+          >
+            <Inbox className="h-3.5 w-3.5" />
+            <span>Unassigned Queue ({folderStats.unassigned.toLocaleString("en-IN")})</span>
+          </button>
+        </div>
+
+        {unassignedOnly && folderStats.unassigned > 0 && (
+          <span className="text-xs font-semibold text-brand hidden md:inline-flex items-center gap-1">
+            ⚡ {folderStats.unassigned.toLocaleString("en-IN")} leads waiting to be assigned to agents
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-2.5 rounded-2xl border bg-card p-3 card-elevated sm:flex-row sm:flex-wrap sm:items-center">
@@ -604,7 +751,23 @@ function DailyLeads() {
                   <Link to="/lead/$leadId" params={{ leadId: l.id }} className="truncate font-bold text-foreground hover:underline">
                     {l.customer_name}
                   </Link>
-                  <LeadStatusBadge status={l.status} />
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Select
+                      value={l.priority || "LOW"}
+                      onValueChange={(val) => updatePriorityM.mutate({ leadId: l.id, priority: val as LeadPriority })}
+                      disabled={updatePriorityM.isPending}
+                    >
+                      <SelectTrigger className={`h-6 w-[88px] border px-1.5 text-[10px] font-bold ${priorityTone(l.priority)}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="HIGH" className="text-rose-600 font-bold">⚡ High</SelectItem>
+                        <SelectItem value="MEDIUM" className="text-amber-600 font-bold">🔶 Med</SelectItem>
+                        <SelectItem value="LOW" className="text-slate-600 font-bold">🔷 Low</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <LeadStatusBadge status={l.status} />
+                  </div>
                 </div>
                 <p className="mt-0.5 font-mono text-xs text-muted-foreground">{l.mobile}</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -651,6 +814,7 @@ function DailyLeads() {
               <th className="w-10 px-4 py-3"><Checkbox checked={visibleLeads.length > 0 && selected.size === visibleLeads.length} onCheckedChange={toggleAll} /></th>
               <th className="px-4 py-3">Lead</th>
               <th className="px-4 py-3">Mobile</th>
+              <th className="px-4 py-3">Priority</th>
               <th className="px-4 py-3">Loan Amount</th>
               <th className="px-4 py-3">Loan Type</th>
               <th className="px-4 py-3">Agent</th>
@@ -668,6 +832,28 @@ function DailyLeads() {
                   <p className="text-[11px] text-muted-foreground">{l.city ?? ""}</p>
                 </td>
                 <td className="px-4 py-3 font-mono text-xs">{l.mobile}</td>
+                <td className="px-4 py-3">
+                  <Select
+                    value={l.priority || "LOW"}
+                    onValueChange={(val) => updatePriorityM.mutate({ leadId: l.id, priority: val as LeadPriority })}
+                    disabled={updatePriorityM.isPending}
+                  >
+                    <SelectTrigger className={`h-7 w-[100px] border px-2 text-[10.5px] font-bold ${priorityTone(l.priority)}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="HIGH" className="text-rose-600 font-bold">
+                        ⚡ High
+                      </SelectItem>
+                      <SelectItem value="MEDIUM" className="text-amber-600 font-bold">
+                        🔶 Medium
+                      </SelectItem>
+                      <SelectItem value="LOW" className="text-slate-600 font-bold">
+                        🔷 Low
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </td>
                 <td className="px-4 py-3 font-semibold">{inr(Number(l.loan_amount))}</td>
                 <td className="px-4 py-3 text-muted-foreground">{l.loan_type}</td>
                 <td className="px-4 py-3">{agentName(l.assigned_to)}</td>

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, CheckCircle2, Copy, Download, FileSpreadsheet, Loader2, RefreshCw, Upload, X, XCircle,
+  AlertTriangle, CheckCircle2, Copy, Download, FileSpreadsheet, Loader2, RefreshCw, ShieldCheck, Upload, X, XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -66,7 +66,6 @@ export function ImportLeadsWizard({
   const [parsed, setParsed] = useState<ParsedSheet | null>(null);
   const [mapping, setMapping] = useState<Record<number, HezoField | "">>({});
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
-  const [dupMode, setDupMode] = useState<"skip" | "import">("skip");
   const [phase, setPhase] = useState("");
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -76,7 +75,7 @@ export function ImportLeadsWizard({
   const [result, setResult] = useState<Result | null>(null);
 
   const reset = () => {
-    setStep(0); setParsed(null); setMapping({}); setSummary(null); setDupMode("skip");
+    setStep(0); setParsed(null); setMapping({}); setSummary(null);
     setPhase(""); setBusy(false); setImporting(false); setBatches([]); setCurrentBatch(0);
     setImportedCount(0); setResult(null); setSelectedCompanyId("");
     cancelRef.current = { cancelled: false };
@@ -136,10 +135,13 @@ export function ImportLeadsWizard({
     }
   };
 
+  // Strict filter: only 100% complete, error-free, non-duplicate rows can ever be imported
   const importable = useMemo(() => {
     if (!summary) return [] as ValidatedRow[];
-    return summary.rows.filter((r) => r.errors.length === 0 && (dupMode === "import" || (!r.duplicateInFile && !r.duplicateExisting)));
-  }, [summary, dupMode]);
+    return summary.rows.filter(
+      (r) => r.errors.length === 0 && !r.duplicateInFile && !r.duplicateExisting
+    );
+  }, [summary]);
 
   const finish = async (
     ctx: ImportContext,
@@ -154,6 +156,28 @@ export function ImportLeadsWizard({
       status,
       completed_at: new Date().toISOString(),
     });
+    // Live priority auto-dispatch if imported > 0
+    if (imported > 0) {
+      try {
+        const { data: queueRes } = await (supabase.rpc as any)("process_live_priority_queue", {
+          p_company_id: ctx.companyId,
+          p_folder_date: ctx.folderDate,
+        });
+        if (queueRes?.assigned_count > 0) {
+          toast.success(
+            `⚡ Priority Auto-Assign: ${queueRes.assigned_count} high-priority leads allocated to active agents immediately!`,
+            { duration: 6000 }
+          );
+        } else if (queueRes?.status === "RUNNING") {
+          toast.info(
+            `📥 Leads placed in live priority queue (High: ${queueRes.high_priority_waiting || 0}, Total Waiting: ${queueRes.total_unassigned || 0})`
+          );
+        }
+      } catch (dispatchErr) {
+        console.warn("[live-dispatch] priority queue process warning:", dispatchErr);
+      }
+    }
+
     setResult({
       imported,
       skipped: ctx.duplicates,
@@ -180,7 +204,7 @@ export function ImportLeadsWizard({
       importId: crypto.randomUUID(),
       rows: importable,
       totalRows: summary.total,
-      duplicates: dupMode === "import" ? 0 : summary.duplicateInFile + summary.duplicateExisting,
+      duplicates: summary.duplicateInFile + summary.duplicateExisting,
       errors: summary.errorCount,
     };
     ctxRef.current = ctx;
@@ -342,10 +366,10 @@ export function ImportLeadsWizard({
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                 {([
                   ["Total Rows", summary.total, "text-foreground"],
-                  ["Valid", summary.valid, "text-success"],
-                  ["Duplicate in file", summary.duplicateInFile, "text-warning"],
-                  ["Duplicate existing", summary.duplicateExisting, "text-warning"],
-                  ["Errors", summary.errorCount, "text-destructive"],
+                  ["Complete & Unique", importable.length, "text-success"],
+                  ["File Duplicates", summary.duplicateInFile, "text-warning"],
+                  ["CRM Duplicates", summary.duplicateExisting, "text-warning"],
+                  ["Validation Errors", summary.errorCount, "text-destructive"],
                 ] as const).map(([label, value, tone]) => (
                   <div key={label} className="rounded-xl border bg-elevated p-3">
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
@@ -354,21 +378,47 @@ export function ImportLeadsWizard({
                 ))}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-elevated p-4">
-                <div>
-                  <p className="text-sm font-semibold">Duplicate handling</p>
-                  <p className="text-xs text-muted-foreground">Existing leads are never overwritten.</p>
+              {/* Automatic Priority Detection Breakdown */}
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-elevated p-3">
+                <span className="text-xs font-bold text-foreground">Auto-Detected Priority:</span>
+                <span className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-bold text-rose-600 dark:text-rose-400">
+                  ⚡ High ({summary.highCount.toLocaleString("en-IN")}) — Front of Queue
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-600 dark:text-amber-400">
+                  🔶 Medium ({summary.mediumCount.toLocaleString("en-IN")}) — Follow-ups
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-lg border border-slate-500/30 bg-slate-500/10 px-2.5 py-1 text-xs font-bold text-slate-600 dark:text-slate-400">
+                  🔷 Low ({summary.lowCount.toLocaleString("en-IN")}) — New Enquiries
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <ShieldCheck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Strict Data Quality &amp; Duplicate Protection</p>
+                    <p className="text-xs text-muted-foreground">
+                      Only 100% complete and non-duplicate leads will be imported. In-file duplicates, existing CRM numbers, and malformed rows are strictly blocked.
+                    </p>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  {([["skip", "Skip duplicates"], ["import", "Import duplicates anyway"]] as const).map(([v, l]) => (
-                    <button key={v} type="button" onClick={() => setDupMode(v)}
-                      className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                        dupMode === v ? "gradient-brand border-transparent text-white" : "hover:bg-muted/50")}>
-                      {l}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Skip Duplicates (Enforced)
+                  </span>
                 </div>
               </div>
+
+              {importable.length === 0 && (
+                <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>
+                    No clean, unique leads found to import. All rows are duplicates or contain errors. Download the Skipped &amp; Error Report below to inspect them.
+                  </span>
+                </div>
+              )}
 
               <div className="overflow-x-auto rounded-xl border">
                 <table className="w-full text-xs">
@@ -377,6 +427,7 @@ export function ImportLeadsWizard({
                       <th className="px-3 py-2">Row</th>
                       <th className="px-3 py-2">Customer Name</th>
                       <th className="px-3 py-2">Mobile</th>
+                      <th className="px-3 py-2">Priority</th>
                       <th className="px-3 py-2">Loan Amount</th>
                       <th className="px-3 py-2">Loan Type</th>
                       <th className="px-3 py-2">Source</th>
@@ -392,6 +443,16 @@ export function ImportLeadsWizard({
                           <td className="px-3 py-2 text-muted-foreground">{r.rowNumber}</td>
                           <td className="px-3 py-2 font-medium">{r.draft.customer_name || "—"}</td>
                           <td className="px-3 py-2 font-mono">{r.draft.mobile || "—"}</td>
+                          <td className="px-3 py-2">
+                            <span className={cn(
+                              "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold border",
+                              r.draft.priority === "HIGH" ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30" :
+                              r.draft.priority === "MEDIUM" ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" :
+                              "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30"
+                            )}>
+                              {r.draft.priority === "HIGH" ? "⚡ High" : r.draft.priority === "MEDIUM" ? "🔶 Med" : "🔷 Low"}
+                            </span>
+                          </td>
                           <td className="px-3 py-2">{r.draft.loan_amount.toLocaleString("en-IN")}</td>
                           <td className="px-3 py-2 text-muted-foreground">{r.draft.loan_type}</td>
                           <td className="px-3 py-2 text-muted-foreground">{r.draft.source}</td>
@@ -402,11 +463,11 @@ export function ImportLeadsWizard({
                               </span>
                             ) : dup ? (
                               <span className="inline-flex items-center gap-1 font-semibold text-warning">
-                                <Copy className="h-3 w-3" />{r.duplicateInFile ? "Duplicate inside file" : "Duplicate already exists"}
+                                <Copy className="h-3 w-3" />{r.duplicateInFile ? "Duplicate in file (Skipped)" : "CRM Duplicate (Skipped)"}
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 font-semibold text-success">
-                                <CheckCircle2 className="h-3 w-3" />Valid
+                                <CheckCircle2 className="h-3 w-3" />Clean &amp; Ready
                               </span>
                             )}
                           </td>

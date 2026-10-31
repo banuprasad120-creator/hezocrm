@@ -10,10 +10,6 @@ export const VALIDATION_CHUNK = 1000;
 
 export const yieldToBrowser = () => new Promise<void>((r) => setTimeout(r, 0));
 
-/** Above this many mobiles, scanning the company's own leads once is cheaper than many `in()` queries. */
-const FULL_SCAN_THRESHOLD = 2000;
-const FULL_SCAN_PAGE = 1000;
-
 const asError = (e: unknown, fallback: string) => {
   if (e instanceof Error) return e;
   const m = (e as { message?: string; hint?: string } | null)?.message;
@@ -22,8 +18,9 @@ const asError = (e: unknown, fallback: string) => {
 
 /**
  * Duplicate detection, scoped to the company.
- * Small files: chunked `in()` queries. Large files: one paged scan of the company's mobiles.
- * Never one query per row.
+ * Small files & large files: Uses Postgres indexed lookup via RPC check_existing_mobiles
+ * with direct chunked index lookup fallback.
+ * Checks candidate mobiles in chunks against idx_leads_company_mobile — fast, scalable, and memory efficient.
  */
 export async function fetchExistingMobiles(
   companyId: string,
@@ -34,32 +31,38 @@ export async function fetchExistingMobiles(
   const existing = new Set<string>();
   if (unique.length === 0) return existing;
 
-  if (unique.length > FULL_SCAN_THRESHOLD) {
-    for (let from = 0; ; from += FULL_SCAN_PAGE) {
+  for (let i = 0; i < unique.length; i += DUPLICATE_LOOKUP_CHUNK) {
+    const chunk = unique.slice(i, i + DUPLICATE_LOOKUP_CHUNK);
+
+    try {
+      const { data: rpcData, error: rpcError } = await (supabase.rpc as any)("check_existing_mobiles", {
+        p_company_id: companyId,
+        p_mobiles: chunk,
+      });
+
+      if (!rpcError && Array.isArray(rpcData)) {
+        for (const m of (rpcData as string[])) {
+          if (m) existing.add(String(m));
+        }
+      } else {
+        const { data, error } = await supabase
+          .from("leads")
+          .select("mobile")
+          .eq("company_id", companyId)
+          .in("mobile", chunk);
+        if (error) throw asError(error, "Could not check existing leads for duplicates");
+        for (const r of data ?? []) existing.add(r.mobile);
+      }
+    } catch {
       const { data, error } = await supabase
         .from("leads")
         .select("mobile")
         .eq("company_id", companyId)
-        .order("mobile", { ascending: true })
-        .range(from, from + FULL_SCAN_PAGE - 1);
+        .in("mobile", chunk);
       if (error) throw asError(error, "Could not check existing leads for duplicates");
       for (const r of data ?? []) existing.add(r.mobile);
-      onProgress?.(existing.size, unique.length);
-      await yieldToBrowser();
-      if (!data || data.length < FULL_SCAN_PAGE) break;
     }
-    return existing;
-  }
 
-  for (let i = 0; i < unique.length; i += DUPLICATE_LOOKUP_CHUNK) {
-    const chunk = unique.slice(i, i + DUPLICATE_LOOKUP_CHUNK);
-    const { data, error } = await supabase
-      .from("leads")
-      .select("mobile")
-      .eq("company_id", companyId)
-      .in("mobile", chunk);
-    if (error) throw asError(error, "Could not check existing leads for duplicates");
-    for (const r of data ?? []) existing.add(r.mobile);
     onProgress?.(Math.min(i + chunk.length, unique.length), unique.length);
     await yieldToBrowser();
   }

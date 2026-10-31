@@ -81,7 +81,7 @@ function MyLeads() {
     queryFn: () => getCompanyBatchSettings(companyId!),
   });
   const batchSize = batchSettings?.batchSize ?? 100;
-  const isAutomationEnabled = batchSettings?.enabled ?? true;
+  const isAutomationEnabled = batchSettings?.status === "RUNNING";
 
   /* ── Fetch Active Batch record ── */
   const { data: activeBatch } = useQuery({
@@ -256,6 +256,10 @@ function MyLeads() {
   /* ── Automated / On-demand Batch Allocation & Refill ── */
   const claimNextBatch = async (customCount?: number, isAutomatic = false) => {
     if (!companyId || !userId || claiming) return;
+    if (batchSettings?.status && batchSettings.status !== "RUNNING") {
+      if (!isAutomatic) toast.info(`Auto-assignment is currently ${batchSettings.status} by admin.`);
+      return;
+    }
     const requestedSize = customCount && customCount > 0 ? customCount : batchSize;
     setClaiming(true);
     try {

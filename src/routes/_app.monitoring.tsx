@@ -8,14 +8,14 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
+  Download,
+  FileSpreadsheet,
   Filter,
   FolderPlus,
   Loader2,
-  Pause,
   Phone,
   PhoneCall,
   PhoneForwarded,
-  Play,
   Plus,
   RefreshCw,
   Sparkles,
@@ -35,11 +35,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
+import { AutoAssignControls } from "@/components/crm/AutoAssignControls";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
 import { cn } from "@/lib/utils";
-import { getCompanyBatchSettings, updateCompanyBatchSettings } from "@/lib/lead-batch";
+import { exportToExcel, exportToCsv } from "@/lib/export-utils";
 
 export const Route = createFileRoute("/_app/monitoring")({
   head: () => ({
@@ -79,34 +80,6 @@ function Monitoring() {
   const [typeFilter, setTypeFilter] = useState<string>(ALL);
   const [importOpen, setImportOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-
-  const { data: batchSettings } = useQuery({
-    queryKey: ["batch-settings", companyId],
-    enabled: Boolean(companyId),
-    queryFn: () => getCompanyBatchSettings(companyId!),
-  });
-
-  const [togglingAutoAssign, setTogglingAutoAssign] = useState(false);
-  const isAutoAssignActive = batchSettings?.enabled ?? true;
-
-  const toggleAutoAssign = async () => {
-    if (!companyId) return;
-    setTogglingAutoAssign(true);
-    const nextVal = !isAutoAssignActive;
-    try {
-      await updateCompanyBatchSettings(companyId, nextVal, batchSettings?.batchSize || 100);
-      toast.success(
-        nextVal
-          ? "⚡ Auto-Assign Started! Active agents will automatically receive batches."
-          : "⏸️ Auto-Assign Paused! Automatic distribution is now on hold."
-      );
-      qc.invalidateQueries({ queryKey: ["batch-settings"] });
-    } catch (e) {
-      toast.error("Failed to update Auto-Assign state", { description: e instanceof Error ? e.message : undefined });
-    } finally {
-      setTogglingAutoAssign(false);
-    }
-  };
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
@@ -312,6 +285,35 @@ function Monitoring() {
 
   const agentName = (id: string | null) => (id ? (agents.find((a) => a.id === id)?.full_name || "Assigned") : "Unassigned");
 
+  const exportMonitoringReport = (format: "xlsx" | "csv") => {
+    if (agentPerformance.length === 0) {
+      toast.info("No agent performance data to export");
+      return;
+    }
+    const rows = agentPerformance.map((p) => ({
+      "Date / Scope": allDates ? "All Dates" : date,
+      "Agent Name": p.name,
+      Email: p.email,
+      "Calls Made": p.callsDoneToday,
+      Connected: p.connected,
+      "Connection Rate": `${p.connPercent}%`,
+      Interested: p.interested,
+      "Follow-ups Scheduled": p.followUps,
+      "Not Interested": p.notInterested,
+      "Folder Leads Total": p.assignedFolderLeads,
+      "Remaining Queue": p.pendingFolderLeads,
+      "Last Call Timestamp": p.lastCall ? formatDateTime(p.lastCall) : "No calls yet",
+    }));
+
+    const filename = `Agent_Performance_${allDates ? "All_Dates" : date}`;
+    if (format === "xlsx") {
+      exportToExcel(rows, filename, "Agent Activity");
+    } else {
+      exportToCsv(rows, filename);
+    }
+    toast.success(`Exported agent activity report as ${format.toUpperCase()}`);
+  };
+
   return (
     <div className="space-y-6 pb-12">
       {/* ── Page Header ── */}
@@ -324,51 +326,41 @@ function Monitoring() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {companyId && <AutoAssignControls companyId={companyId} />}
             <Button
-              size="sm"
               variant="outline"
-              disabled={togglingAutoAssign}
-              className={`h-9 font-bold transition-all shadow-xs gap-1.5 ${
-                isAutoAssignActive
-                  ? "border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
-                  : "border-amber-500/50 text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20"
-              }`}
-              onClick={toggleAutoAssign}
-              title={isAutoAssignActive ? "Auto-Assign is ACTIVE. Click to Pause." : "Auto-Assign is PAUSED. Click to Start."}
+              size="sm"
+              onClick={() => exportMonitoringReport("xlsx")}
+              className="gap-1.5 h-9 text-xs font-semibold"
+              title="Export agent activity report as Excel (.xlsx)"
             >
-              {togglingAutoAssign ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : isAutoAssignActive ? (
-                <>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <Pause className="h-3.5 w-3.5" />
-                  <span>Auto-Assign: Active (Pause)</span>
-                </>
-              ) : (
-                <>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                  <Play className="h-3.5 w-3.5" />
-                  <span>Auto-Assign: Paused (Start)</span>
-                </>
-              )}
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Export Excel</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => exportMonitoringReport("csv")}
+              className="gap-1.5 h-9 text-xs font-semibold"
+              title="Export agent activity report as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">CSV</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              className="gap-1.5 h-9"
+              className="gap-1.5 h-9 text-xs font-semibold"
             >
               <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin text-brand")} />
-              <span>{isRefreshing ? "Refreshing…" : "Live Refresh"}</span>
+              <span>{isRefreshing ? "Refreshing…" : "Sync"}</span>
             </Button>
             <Button
               size="sm"
               onClick={() => setImportOpen(true)}
-              className="gradient-brand text-white font-bold h-9 gap-1.5 shadow-sm"
+              className="gradient-brand text-white font-bold h-9 gap-1.5 shadow-sm text-xs"
             >
               <FolderPlus className="h-4 w-4" />
               <span>+ New Date Folder</span>

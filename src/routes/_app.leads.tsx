@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Download, Inbox, Loader2, MessageCircle, Phone, Search, Trash2, Upload, Users2, Eye,
+  Download, FileSpreadsheet, Inbox, Loader2, MessageCircle, Phone, Search, Trash2, Upload, Users2, Eye,
   Clock, Flame, PhoneCall, CheckCircle2, RefreshCw, Plus, UserPlus, UserCheck, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { cn } from "@/lib/utils";
 import { bulkPermanentDeleteLeadsServerFn, permanentDeleteLeadServerFn } from "@/lib/crm.functions";
+import { exportToExcel, exportToCsv } from "@/lib/export-utils";
 
 export const Route = createFileRoute("/_app/leads")({
   validateSearch: (search: Record<string, unknown>): { agent?: string; status?: string } => ({
@@ -291,7 +292,7 @@ function LeadsPage() {
     }
   };
 
-  const exportCsv = async () => {
+  const exportLeads = async (format: "xlsx" | "csv") => {
     if (busy) return;
     setBusy(true);
     try {
@@ -306,19 +307,30 @@ function LeadsPage() {
         if (!data || data.length < chunk) break;
       }
       if (out.length === 0) { toast.info("Nothing to export for these filters"); return; }
-      const cols = ["id", "customer_name", "mobile", "email", "loan_type", "loan_amount", "city", "status", "folder_date", "assigned_to", "last_call_at"] as const;
-      const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-      const csv = [
-        cols.join(","),
-        ...out.map((l) => cols.map((c) => escape(c === "assigned_to" ? agentName(l.assigned_to) : l[c])).join(",")),
-      ].join("\n");
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `hezo-leads-${todayISO()}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Exported ${out.length} leads`);
+      const rows = out.map((l) => ({
+        "Lead ID": l.id,
+        "Customer Name": l.customer_name,
+        "Mobile": l.mobile,
+        "Alternate Mobile": l.alternate_mobile || "",
+        "Email": l.email || "",
+        "Status": l.status,
+        "Assigned Agent": agentName(l.assigned_to),
+        "Loan Amount": l.loan_amount || "",
+        "Loan Type": l.loan_type || "",
+        "City": l.city || "",
+        "State": l.state || "",
+        "Folder Date": l.folder_date,
+        "Last Call At": l.last_call_at ? formatDateTime(l.last_call_at) : "",
+        "Created At": formatDateTime(l.created_at),
+      }));
+
+      const filename = `hezo-leads-${todayISO()}`;
+      if (format === "xlsx") {
+        exportToExcel(rows, filename, "Leads");
+      } else {
+        exportToCsv(rows, filename);
+      }
+      toast.success(`Exported ${out.length} leads as ${format.toUpperCase()}`);
     } catch (e) {
       toast.error("Export failed", { description: e instanceof Error ? e.message : undefined });
     } finally {
@@ -336,7 +348,7 @@ function LeadsPage() {
         title="All Leads"
         description="Every lead in your company — search, filter, track agent assignments, and add direct leads."
         actions={
-          <>
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
               className="h-9 gap-1.5 gradient-brand text-white font-bold shadow-xs"
@@ -348,25 +360,44 @@ function LeadsPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-9"
+              className="h-9 gap-1.5"
               onClick={() => {
                 qc.invalidateQueries({ queryKey: ["all-leads"] });
                 qc.invalidateQueries({ queryKey: ["all-leads-stats"] });
                 toast.success("Leads refreshed");
               }}
             >
-              <RefreshCw className="mr-1.5 h-4 w-4" /> Refresh
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </Button>
             <Button variant="outline" size="sm" className="h-9" onClick={() => setImportOpen(true)}>
               <Upload className="mr-1.5 h-4 w-4" /> Import CSV
             </Button>
-            <Button variant="outline" size="sm" className="h-9" disabled={busy} onClick={exportCsv}>
-              {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Download className="mr-1.5 h-4 w-4" />} Export
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 text-xs font-semibold"
+              disabled={busy}
+              onClick={() => exportLeads("xlsx")}
+              title="Export filtered leads as Excel (.xlsx)"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />}
+              <span>Export Excel</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 text-xs font-semibold"
+              disabled={busy}
+              onClick={() => exportLeads("csv")}
+              title="Export filtered leads as CSV"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              <span>CSV</span>
             </Button>
             <Button asChild size="sm" variant="secondary" className="h-9 font-semibold">
               <Link to="/daily-leads">Folders / Batches</Link>
             </Button>
-          </>
+          </div>
         }
       />
 

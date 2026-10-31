@@ -131,6 +131,9 @@ export type Database = {
           name: string
           plan: string
           status: string
+          auto_assign_status: string
+          lead_batch_automation_enabled: boolean
+          agent_lead_batch_size: number
         }
         Insert: {
           created_at?: string
@@ -138,6 +141,9 @@ export type Database = {
           name: string
           plan?: string
           status?: string
+          auto_assign_status?: string
+          lead_batch_automation_enabled?: boolean
+          agent_lead_batch_size?: number
         }
         Update: {
           created_at?: string
@@ -145,6 +151,9 @@ export type Database = {
           name?: string
           plan?: string
           status?: string
+          auto_assign_status?: string
+          lead_batch_automation_enabled?: boolean
+          agent_lead_batch_size?: number
         }
         Relationships: []
       }
@@ -378,6 +387,7 @@ export type Database = {
           notes: string | null
           pan: string | null
           pincode: string | null
+          priority: "HIGH" | "MEDIUM" | "LOW"
           source: string | null
           state: string | null
           status: Database["public"]["Enums"]["lead_status"]
@@ -409,6 +419,7 @@ export type Database = {
           notes?: string | null
           pan?: string | null
           pincode?: string | null
+          priority?: "HIGH" | "MEDIUM" | "LOW"
           source?: string | null
           state?: string | null
           status?: Database["public"]["Enums"]["lead_status"]
@@ -440,6 +451,7 @@ export type Database = {
           notes?: string | null
           pan?: string | null
           pincode?: string | null
+          priority?: "HIGH" | "MEDIUM" | "LOW"
           source?: string | null
           state?: string | null
           status?: Database["public"]["Enums"]["lead_status"]

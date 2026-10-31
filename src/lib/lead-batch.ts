@@ -1,5 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 
+export type AutoAssignStatus = "RUNNING" | "PAUSED" | "STOPPED";
+
 export interface LeadBatch {
   id: string;
   company_id: string;
@@ -18,30 +20,51 @@ export interface LeadBatch {
 export interface CompanyBatchSettings {
   enabled: boolean;
   batchSize: number;
+  status: AutoAssignStatus;
+}
+
+export interface ControlActionResult {
+  success: boolean;
+  status: AutoAssignStatus;
+  message: string;
+  agents_refilled?: number;
+  total_leads_assigned?: number;
+  recalled_count?: number;
+}
+
+export interface DistributeResult {
+  success: boolean;
+  agents_count: number;
+  total_assigned: number;
+  message: string;
 }
 
 /**
  * Fetch company lead batch automation settings.
- * Defaults to enabled: true, batchSize: 100.
+ * Defaults to enabled: true, batchSize: 100, status: 'RUNNING'.
  */
 export async function getCompanyBatchSettings(companyId: string): Promise<CompanyBatchSettings> {
   try {
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { data, error } = await (supabase.from as any)("companies")
-      .select("lead_batch_automation_enabled, agent_lead_batch_size")
+      .select("lead_batch_automation_enabled, agent_lead_batch_size, auto_assign_status")
       .eq("id", companyId)
       .maybeSingle();
 
     if (error || !data) {
-      return { enabled: true, batchSize: 100 };
+      return { enabled: true, batchSize: 100, status: "RUNNING" };
     }
 
+    const rawStatus = (data.auto_assign_status as string) || (data.lead_batch_automation_enabled ? "RUNNING" : "PAUSED");
+    const status: AutoAssignStatus = rawStatus === "STOPPED" ? "STOPPED" : rawStatus === "PAUSED" ? "PAUSED" : "RUNNING";
+
     return {
-      enabled: data.lead_batch_automation_enabled ?? true,
+      enabled: status === "RUNNING",
       batchSize: Number(data.agent_lead_batch_size) || 100,
+      status,
     };
   } catch {
-    return { enabled: true, batchSize: 100 };
+    return { enabled: true, batchSize: 100, status: "RUNNING" };
   }
 }
 
@@ -51,17 +74,124 @@ export async function getCompanyBatchSettings(companyId: string): Promise<Compan
 export async function updateCompanyBatchSettings(
   companyId: string,
   enabled: boolean,
-  batchSize: number
+  batchSize: number,
+  status?: AutoAssignStatus
 ): Promise<void> {
+  const currentStatus: AutoAssignStatus = status ?? (enabled ? "RUNNING" : "PAUSED");
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const { error } = await (supabase.from as any)("companies")
     .update({
-      lead_batch_automation_enabled: enabled,
+      lead_batch_automation_enabled: currentStatus === "RUNNING",
+      auto_assign_status: currentStatus,
       agent_lead_batch_size: Math.max(1, batchSize),
     })
     .eq("id", companyId);
 
   if (error) throw error;
+}
+
+/**
+ * Start Auto-Assignment (RUNNING):
+ * Sets status to RUNNING and immediately triggers batch allocation for all active agents with 0 pending leads.
+ */
+export async function startAutoAssignment(companyId: string): Promise<ControlActionResult> {
+  try {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const { data, error } = await (supabase.rpc as any)("start_auto_assignment", {
+      p_company_id: companyId,
+    });
+    if (error) throw error;
+    return (data as ControlActionResult) || { success: true, status: "RUNNING", message: "Auto-assign started." };
+  } catch (err) {
+    // Fallback: update status directly
+    await updateCompanyBatchSettings(companyId, true, 100, "RUNNING");
+    return {
+      success: true,
+      status: "RUNNING",
+      message: err instanceof Error ? err.message : "Auto-assign started.",
+    };
+  }
+}
+
+/**
+ * Pause Auto-Assignment (PAUSED):
+ * Freezes automatic batch distribution without touching existing agent queues.
+ */
+export async function pauseAutoAssignment(companyId: string): Promise<ControlActionResult> {
+  try {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const { data, error } = await (supabase.rpc as any)("pause_auto_assignment", {
+      p_company_id: companyId,
+    });
+    if (error) throw error;
+    return (data as ControlActionResult) || { success: true, status: "PAUSED", message: "Auto-assign paused." };
+  } catch {
+    await updateCompanyBatchSettings(companyId, false, 100, "PAUSED");
+    return { success: true, status: "PAUSED", message: "Auto-assign paused." };
+  }
+}
+
+/**
+ * Stop Auto-Assignment (STOPPED):
+ * Completely halts auto-assignment. Optionally recalls uncontacted assigned leads back to the unassigned queue.
+ */
+export async function stopAutoAssignment(
+  companyId: string,
+  recallUncontacted = true
+): Promise<ControlActionResult> {
+  try {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const { data, error } = await (supabase.rpc as any)("stop_auto_assignment", {
+      p_company_id: companyId,
+      p_recall_uncontacted: Boolean(recallUncontacted),
+    });
+    if (error) throw error;
+    return (data as ControlActionResult) || { success: true, status: "STOPPED", message: "Auto-assign stopped." };
+  } catch {
+    await updateCompanyBatchSettings(companyId, false, 100, "STOPPED");
+    let recalledCount = 0;
+    if (recallUncontacted) {
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const { data: recalled } = await (supabase.from as any)("leads")
+        .update({ assigned_to: null, status: "New", assigned_at: null })
+        .eq("company_id", companyId)
+        .eq("status", "Assigned")
+        .is("last_call_at", null)
+        .select("id");
+      recalledCount = recalled?.length ?? 0;
+
+      await (supabase.from as any)("lead_batches")
+        .update({ status: "COMPLETED", completed_at: new Date().toISOString() })
+        .eq("company_id", companyId)
+        .eq("status", "IN_PROGRESS");
+    }
+    return {
+      success: true,
+      status: "STOPPED",
+      recalled_count: recalledCount,
+      message: "Auto-assign stopped." + (recalledCount > 0 ? ` ${recalledCount} uncontacted leads recalled to queue.` : ""),
+    };
+  }
+}
+
+/**
+ * Distribute Leads Equally among selected active agents.
+ */
+export async function distributeLeadsEqually(
+  companyId: string,
+  agentIds: string[],
+  leadsPerAgent = 100,
+  folderDate?: string | null
+): Promise<DistributeResult> {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const { data, error } = await (supabase.rpc as any)("distribute_leads_equally", {
+    p_company_id: companyId,
+    p_agent_ids: agentIds,
+    p_leads_per_agent: leadsPerAgent,
+    p_folder_date: folderDate && folderDate !== "all" ? folderDate : null,
+  });
+  if (error) throw error;
+  return data as DistributeResult;
 }
 
 /**
@@ -150,7 +280,7 @@ export async function getUnassignedLeadsCount(companyId: string, folderDate?: st
 }
 
 /**
- * Request next batch of leads for an agent atomically via Supabase RPC or client transaction.
+ * Request next batch of leads for an agent atomically via Supabase RPC.
  */
 export async function allocateNextLeadBatch(
   companyId: string,
@@ -161,7 +291,18 @@ export async function allocateNextLeadBatch(
   folderDate?: string | null
 ): Promise<AllocationResult> {
   try {
-    // 1. Try atomic PostgreSQL RPC function
+    const isManual = source === "MANUAL_ADMIN_DIRECT" || source === "MANUAL_DISTRIBUTE" || source.startsWith("ADMIN_");
+    if (!isManual) {
+      const settings = await getCompanyBatchSettings(companyId);
+      if (settings.status !== "RUNNING") {
+        return {
+          success: false,
+          message: `Auto-assignment is currently ${settings.status}. Automatic lead allocation is blocked.`,
+          assigned_count: 0,
+        };
+      }
+    }
+
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { data: rpcRes, error: rpcErr } = await (supabase.rpc as any)("allocate_lead_batch", {
       p_company_id: companyId,
@@ -180,7 +321,6 @@ export async function allocateNextLeadBatch(
       console.warn("[allocateNextLeadBatch] RPC warning, falling back to client-side:", rpcErr);
     }
 
-    // 2. Client-side fallback if RPC is ever unreachable
     return await clientSideFallbackAllocate(companyId, employeeId, batchSize, source, allowWhenPending, folderDate);
   } catch (e) {
     return {
@@ -192,7 +332,7 @@ export async function allocateNextLeadBatch(
 }
 
 /**
- * Safe client-side fallback allocation with strict deduplication
+ * Client-side fallback allocation with strict deduplication
  */
 async function clientSideFallbackAllocate(
   companyId: string,
@@ -202,10 +342,18 @@ async function clientSideFallbackAllocate(
   allowWhenPending = false,
   folderDate?: string | null
 ): Promise<AllocationResult> {
-  const isManual = allowWhenPending || source !== "AUTO_BATCH_REFILL";
+  const isManual = allowWhenPending || (source === "MANUAL_ADMIN_DIRECT" || source === "MANUAL_DISTRIBUTE" || source.startsWith("ADMIN_"));
 
-  // Check if agent already has pending leads (only block automatic refills)
   if (!isManual) {
+    const settings = await getCompanyBatchSettings(companyId);
+    if (settings.status !== "RUNNING") {
+      return {
+        success: false,
+        message: `Auto-assignment is currently ${settings.status}. Automatic lead allocation is blocked.`,
+        assigned_count: 0,
+      };
+    }
+
     const { count: pendingCount } = await supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
@@ -223,7 +371,6 @@ async function clientSideFallbackAllocate(
     }
   }
 
-  // Fetch company history of assigned/called numbers to strictly exclude
   const { data: historyLeads } = await supabase
     .from("leads")
     .select("mobile")
@@ -236,7 +383,6 @@ async function clientSideFallbackAllocate(
     if (clean) alreadySentMobiles.add(clean);
   }
 
-  // Fetch unassigned leads
   let query = supabase
     .from("leads")
     .select("id, mobile")
@@ -291,7 +437,6 @@ async function clientSideFallbackAllocate(
 
   const now = new Date().toISOString();
 
-  // Mark previous IN_PROGRESS batches completed
   /* eslint-disable @typescript-eslint/no-explicit-any */
   await (supabase.from as any)("lead_batches")
     .update({ status: "COMPLETED", completed_at: now })
@@ -299,7 +444,6 @@ async function clientSideFallbackAllocate(
     .eq("employee_id", employeeId)
     .eq("status", "IN_PROGRESS");
 
-  // Get next batch number
   const { data: prevBatches } = await (supabase.from as any)("lead_batches")
     .select("batch_number")
     .eq("company_id", companyId)
@@ -309,13 +453,11 @@ async function clientSideFallbackAllocate(
 
   const nextBatchNum = (prevBatches?.[0]?.batch_number ?? 0) + 1;
 
-  // Update leads
   await supabase
     .from("leads")
     .update({ assigned_to: employeeId, assigned_at: now, status: "Assigned" })
     .in("id", idsToAssign);
 
-  // Lock duplicate mobiles
   if (mobilesToLock.length > 0) {
     await supabase
       .from("leads")
@@ -324,7 +466,6 @@ async function clientSideFallbackAllocate(
       .eq("company_id", companyId);
   }
 
-  // Insert lead_assignments
   await supabase.from("lead_assignments").upsert(
     idsToAssign.map((id) => ({
       lead_id: id,
@@ -335,7 +476,6 @@ async function clientSideFallbackAllocate(
     { onConflict: "lead_id" }
   );
 
-  // Insert lead_batches
   const { data: newBatch } = await (supabase.from as any)("lead_batches")
     .insert({
       company_id: companyId,

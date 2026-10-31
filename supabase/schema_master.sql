@@ -704,4 +704,693 @@ CREATE TRIGGER tr_auto_confirm_user
   FOR EACH ROW
   EXECUTE FUNCTION public.auto_confirm_user();
 
+-- ==========================================
+-- MIGRATION: 20261015000000_lead_batches_and_auto_assign.sql
+-- ==========================================
+ALTER TABLE public.companies 
+  ADD COLUMN IF NOT EXISTS auto_assign_status text NOT NULL DEFAULT 'RUNNING',
+  ADD COLUMN IF NOT EXISTS lead_batch_automation_enabled boolean NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS agent_lead_batch_size integer NOT NULL DEFAULT 100;
+
+CREATE TABLE IF NOT EXISTS public.lead_batches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  employee_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  batch_number integer NOT NULL DEFAULT 1,
+  batch_size integer NOT NULL DEFAULT 100,
+  assigned_count integer NOT NULL DEFAULT 0,
+  lead_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status text NOT NULL DEFAULT 'IN_PROGRESS',
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz,
+  assignment_source text NOT NULL DEFAULT 'AUTO_BATCH_REFILL',
+  created_by text NOT NULL DEFAULT 'SYSTEM'
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.lead_batches TO authenticated;
+GRANT ALL ON public.lead_batches TO service_role;
+ALTER TABLE public.lead_batches ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Companies can access own lead_batches" ON public.lead_batches;
+CREATE POLICY "Companies can access own lead_batches" ON public.lead_batches
+  FOR ALL TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS idx_lead_batches_emp_status ON public.lead_batches(employee_id, status);
+CREATE INDEX IF NOT EXISTS idx_lead_batches_company ON public.lead_batches(company_id, assigned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_unassigned_pool ON public.leads(company_id, folder_date, created_at)
+  WHERE assigned_to IS NULL AND status = 'New' AND last_call_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_leads_agent_pending ON public.leads(company_id, assigned_to, status)
+  WHERE status IN ('New', 'Assigned');
+CREATE INDEX IF NOT EXISTS idx_attendance_company_date ON public.attendance(company_id, work_date);
+
+-- Follow-Up Auto-Resolution Function & Trigger
+CREATE OR REPLACE FUNCTION public.fn_auto_resolve_follow_ups()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status <> 'Follow-up' THEN
+    UPDATE public.follow_ups
+    SET is_done = true
+    WHERE lead_id = NEW.id AND is_done = false;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_auto_resolve_follow_ups ON public.leads;
+CREATE TRIGGER trg_auto_resolve_follow_ups
+AFTER UPDATE OF status ON public.leads
+FOR EACH ROW
+WHEN (NEW.status IS DISTINCT FROM OLD.status AND NEW.status <> 'Follow-up')
+EXECUTE FUNCTION public.fn_auto_resolve_follow_ups();
+
+-- Canonical allocate_lead_batch Function
+CREATE OR REPLACE FUNCTION public.allocate_lead_batch(
+  p_company_id uuid,
+  p_employee_id uuid,
+  p_batch_size integer DEFAULT 100,
+  p_source text DEFAULT 'AUTO_BATCH_REFILL'::text,
+  p_allow_when_pending boolean DEFAULT false,
+  p_folder_date text DEFAULT NULL::text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_lead_ids uuid[];
+  v_lead_mobiles text[];
+  v_batch_num integer := 1;
+  v_allocated_count integer := 0;
+  v_batch_id uuid;
+  v_now timestamptz := now();
+  v_lead_id uuid;
+  v_pending_count integer := 0;
+  v_is_active boolean := true;
+  v_auto_status text := 'RUNNING';
+  v_auto_enabled boolean := true;
+BEGIN
+  -- Strict check: if auto assignment is STOPPED or PAUSED, block automatic batch refill or assignment
+  SELECT COALESCE(auto_assign_status, 'RUNNING'), COALESCE(lead_batch_automation_enabled, true)
+  INTO v_auto_status, v_auto_enabled
+  FROM public.companies
+  WHERE id = p_company_id;
+
+  IF v_auto_status != 'RUNNING' AND p_source NOT IN ('MANUAL_ADMIN_DIRECT', 'MANUAL_DISTRIBUTE', 'ADMIN_MANUAL_ALLOCATION', 'ADMIN_TEST_REFILL') THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'status', v_auto_status,
+      'message', 'Auto-assignment is currently ' || v_auto_status || ' by administrator. Automatic lead allocation is blocked.',
+      'assigned_count', 0
+    );
+  END IF;
+
+  SELECT COALESCE(is_active, true) INTO v_is_active
+  FROM public.profiles
+  WHERE id = p_employee_id;
+
+  IF NOT v_is_active THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'message', 'Agent is marked inactive',
+      'assigned_count', 0
+    );
+  END IF;
+
+  IF NOT COALESCE(p_allow_when_pending, false) THEN
+    SELECT COUNT(*) INTO v_pending_count
+    FROM public.leads
+    WHERE company_id = p_company_id
+      AND assigned_to = p_employee_id
+      AND status IN ('New', 'Assigned');
+
+    IF v_pending_count > 0 THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'message', 'Agent already has ' || v_pending_count || ' pending leads in current batch',
+        'assigned_count', 0,
+        'remaining_pending', v_pending_count
+      );
+    END IF;
+  END IF;
+
+  UPDATE public.lead_batches
+  SET status = 'COMPLETED', completed_at = v_now
+  WHERE company_id = p_company_id
+    AND employee_id = p_employee_id
+    AND status = 'IN_PROGRESS';
+
+  SELECT COALESCE(MAX(batch_number), 0) + 1 INTO v_batch_num
+  FROM public.lead_batches
+  WHERE company_id = p_company_id AND employee_id = p_employee_id;
+
+  IF p_folder_date IS NOT NULL AND p_folder_date != '' AND p_folder_date != 'all' THEN
+    SELECT ARRAY_AGG(id), ARRAY_AGG(mobile)
+    INTO v_lead_ids, v_lead_mobiles
+    FROM (
+      SELECT id, mobile
+      FROM public.leads
+      WHERE company_id = p_company_id
+        AND assigned_to IS NULL
+        AND status = 'New'
+        AND last_call_at IS NULL
+        AND folder_date::text LIKE (p_folder_date || '%')
+          ORDER BY
+            CASE priority
+              WHEN 'HIGH' THEN 1
+              WHEN 'MEDIUM' THEN 2
+              WHEN 'LOW' THEN 3
+              ELSE 4
+            END ASC,
+            created_at ASC
+          LIMIT GREATEST(1, p_batch_size)
+          FOR UPDATE SKIP LOCKED
+        ) t;
+      ELSE
+        SELECT ARRAY_AGG(id), ARRAY_AGG(mobile)
+        INTO v_lead_ids, v_lead_mobiles
+        FROM (
+          SELECT id, mobile
+          FROM public.leads
+          WHERE company_id = p_company_id
+            AND assigned_to IS NULL
+            AND status = 'New'
+            AND last_call_at IS NULL
+          ORDER BY
+            CASE priority
+              WHEN 'HIGH' THEN 1
+              WHEN 'MEDIUM' THEN 2
+              WHEN 'LOW' THEN 3
+              ELSE 4
+            END ASC,
+            created_at ASC
+      LIMIT GREATEST(1, p_batch_size)
+      FOR UPDATE SKIP LOCKED
+    ) t;
+  END IF;
+
+  IF v_lead_ids IS NULL OR array_length(v_lead_ids, 1) IS NULL OR array_length(v_lead_ids, 1) = 0 THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'message', 'No unassigned leads available in company',
+      'assigned_count', 0,
+      'batch_number', v_batch_num
+    );
+  END IF;
+
+  v_allocated_count := array_length(v_lead_ids, 1);
+
+  UPDATE public.leads
+  SET assigned_to = p_employee_id,
+      assigned_at = v_now,
+      status = 'Assigned'
+  WHERE id = ANY(v_lead_ids);
+
+  IF v_lead_mobiles IS NOT NULL AND array_length(v_lead_mobiles, 1) > 0 THEN
+    UPDATE public.leads
+    SET assigned_to = p_employee_id,
+        assigned_at = v_now,
+        status = 'Assigned'
+    WHERE company_id = p_company_id
+      AND mobile = ANY(v_lead_mobiles)
+      AND (assigned_to IS NULL OR assigned_to = p_employee_id);
+  END IF;
+
+  FOREACH v_lead_id IN ARRAY v_lead_ids
+  LOOP
+    INSERT INTO public.lead_assignments(lead_id, company_id, employee_id, assigned_by)
+    VALUES (v_lead_id, p_company_id, p_employee_id, p_employee_id)
+    ON CONFLICT DO NOTHING;
+  END LOOP;
+
+  INSERT INTO public.lead_batches(
+    company_id, employee_id, batch_number, batch_size, assigned_count,
+    lead_ids, status, assigned_at, assignment_source, created_by
+  )
+  VALUES (
+    p_company_id, p_employee_id, v_batch_num, p_batch_size, v_allocated_count,
+    to_jsonb(v_lead_ids), 'IN_PROGRESS', v_now, p_source, 'SYSTEM'
+  )
+  RETURNING id INTO v_batch_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'batch_id', v_batch_id,
+    'batch_number', v_batch_num,
+    'assigned_count', v_allocated_count,
+    'batch_size', p_batch_size,
+    'message', v_allocated_count || ' new leads assigned in Batch #' || v_batch_num
+  );
+END;
+$$;
+
+-- Auto-refill Triggers on leads & call_history
+CREATE OR REPLACE FUNCTION public.check_and_refill_agent_batch_on_lead()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_pending_count integer := 0;
+  v_auto_enabled boolean := true;
+  v_auto_status text := 'RUNNING';
+  v_batch_size integer := 100;
+  v_emp_active boolean := true;
+BEGIN
+  IF OLD.assigned_to IS NOT NULL AND (
+    NEW.last_call_at IS DISTINCT FROM OLD.last_call_at OR
+    (OLD.status IN ('New', 'Assigned') AND NEW.status NOT IN ('New', 'Assigned'))
+  ) THEN
+    SELECT COALESCE(lead_batch_automation_enabled, true), COALESCE(agent_lead_batch_size, 100), COALESCE(auto_assign_status, 'RUNNING')
+    INTO v_auto_enabled, v_batch_size, v_auto_status
+    FROM public.companies
+    WHERE id = NEW.company_id;
+
+    IF NOT v_auto_enabled OR v_auto_status != 'RUNNING' THEN
+      RETURN NEW;
+    END IF;
+
+    SELECT COALESCE(is_active, true) INTO v_emp_active
+    FROM public.profiles
+    WHERE id = NEW.assigned_to;
+
+    IF NOT v_emp_active THEN
+      RETURN NEW;
+    END IF;
+
+    SELECT COUNT(*) INTO v_pending_count
+    FROM public.leads
+    WHERE company_id = NEW.company_id
+      AND assigned_to = NEW.assigned_to
+      AND status IN ('New', 'Assigned')
+      AND id != NEW.id;
+
+    IF v_pending_count = 0 THEN
+      PERFORM public.allocate_lead_batch(NEW.company_id, NEW.assigned_to, v_batch_size, 'AUTO_BATCH_REFILL', false, NULL);
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_auto_batch_refill_on_lead_update ON public.leads;
+CREATE TRIGGER trg_auto_batch_refill_on_lead_update
+AFTER UPDATE ON public.leads
+FOR EACH ROW
+EXECUTE FUNCTION public.check_and_refill_agent_batch_on_lead();
+
+CREATE OR REPLACE FUNCTION public.check_and_refill_agent_batch_on_call()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_pending_count integer := 0;
+  v_auto_enabled boolean := true;
+  v_auto_status text := 'RUNNING';
+  v_batch_size integer := 100;
+  v_emp_active boolean := true;
+BEGIN
+  SELECT COALESCE(lead_batch_automation_enabled, true), COALESCE(agent_lead_batch_size, 100), COALESCE(auto_assign_status, 'RUNNING')
+  INTO v_auto_enabled, v_batch_size, v_auto_status
+  FROM public.companies
+  WHERE id = NEW.company_id;
+
+  IF NOT v_auto_enabled OR v_auto_status != 'RUNNING' THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT COALESCE(is_active, true) INTO v_emp_active
+  FROM public.profiles
+  WHERE id = NEW.employee_id;
+
+  IF NOT v_emp_active THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT COUNT(*) INTO v_pending_count
+  FROM public.leads
+  WHERE company_id = NEW.company_id
+    AND assigned_to = NEW.employee_id
+    AND status IN ('New', 'Assigned');
+
+  IF v_pending_count = 0 THEN
+    PERFORM public.allocate_lead_batch(NEW.company_id, NEW.employee_id, v_batch_size, 'AUTO_BATCH_REFILL', false, NULL);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_auto_batch_refill_on_call_insert ON public.call_history;
+CREATE TRIGGER trg_auto_batch_refill_on_call_insert
+AFTER INSERT ON public.call_history
+FOR EACH ROW
+EXECUTE FUNCTION public.check_and_refill_agent_batch_on_call();
+
+-- Tri-State Controls RPCs
+CREATE OR REPLACE FUNCTION public.start_auto_assignment(p_company_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_batch_size integer := 100;
+  v_agent record;
+  v_refilled_agents integer := 0;
+  v_total_assigned integer := 0;
+  v_alloc_res jsonb;
+  v_pending integer;
+BEGIN
+  UPDATE public.companies
+  SET auto_assign_status = 'RUNNING',
+      lead_batch_automation_enabled = true
+  WHERE id = p_company_id
+  RETURNING COALESCE(agent_lead_batch_size, 100) INTO v_batch_size;
+
+  FOR v_agent IN
+    SELECT p.id, p.full_name, p.email
+    FROM public.profiles p
+    JOIN public.user_roles ur ON ur.user_id = p.id
+    WHERE p.company_id = p_company_id
+      AND p.is_active = true
+      AND ur.role = 'agent'
+  LOOP
+    SELECT COUNT(*) INTO v_pending
+    FROM public.leads
+    WHERE company_id = p_company_id
+      AND assigned_to = v_agent.id
+      AND status IN ('New', 'Assigned');
+
+    IF v_pending = 0 THEN
+      v_alloc_res := public.allocate_lead_batch(p_company_id, v_agent.id, v_batch_size, 'START_AUTO_ASSIGN', false, NULL);
+      IF (v_alloc_res->>'assigned_count')::integer > 0 THEN
+        v_refilled_agents := v_refilled_agents + 1;
+        v_total_assigned := v_total_assigned + (v_alloc_res->>'assigned_count')::integer;
+      END IF;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'status', 'RUNNING',
+    'agents_refilled', v_refilled_agents,
+    'total_leads_assigned', v_total_assigned,
+    'message', 'Auto-assign started. ' || v_refilled_agents || ' agents allocated ' || v_total_assigned || ' leads immediately.'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.pause_auto_assignment(p_company_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.companies
+  SET auto_assign_status = 'PAUSED',
+      lead_batch_automation_enabled = false
+  WHERE id = p_company_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'status', 'PAUSED',
+    'message', 'Auto-assign paused. Background automatic refilling is on hold.'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.stop_auto_assignment(p_company_id uuid, p_recall_uncontacted boolean DEFAULT true)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_recalled_count integer := 0;
+BEGIN
+  UPDATE public.companies
+  SET auto_assign_status = 'STOPPED',
+      lead_batch_automation_enabled = false
+  WHERE id = p_company_id;
+
+  IF COALESCE(p_recall_uncontacted, true) THEN
+    WITH recalled AS (
+      UPDATE public.leads
+      SET assigned_to = NULL,
+          status = 'New',
+          assigned_at = NULL
+      WHERE company_id = p_company_id
+        AND assigned_to IS NOT NULL
+        AND status = 'Assigned'
+        AND last_call_at IS NULL
+      RETURNING id
+    )
+    SELECT COUNT(*) INTO v_recalled_count FROM recalled;
+
+    UPDATE public.lead_batches
+    SET status = 'COMPLETED', completed_at = now()
+    WHERE company_id = p_company_id
+      AND status = 'IN_PROGRESS';
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'status', 'STOPPED',
+    'recalled_count', v_recalled_count,
+    'message', 'Auto-assign stopped' || CASE WHEN v_recalled_count > 0 THEN '. ' || v_recalled_count || ' uncontacted leads returned to unassigned pool.' ELSE '.' END
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.distribute_leads_equally(
+  p_company_id uuid,
+  p_agent_ids uuid[],
+  p_leads_per_agent integer DEFAULT 100,
+  p_folder_date text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_agent_id uuid;
+  v_alloc_res jsonb;
+  v_total_assigned integer := 0;
+  v_successful_agents integer := 0;
+  v_details jsonb := '[]'::jsonb;
+BEGIN
+  IF p_agent_ids IS NULL OR array_length(p_agent_ids, 1) IS NULL OR array_length(p_agent_ids, 1) = 0 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'No agents selected for distribution', 'total_assigned', 0);
+  END IF;
+
+  FOREACH v_agent_id IN ARRAY p_agent_ids
+  LOOP
+    v_alloc_res := public.allocate_lead_batch(p_company_id, v_agent_id, p_leads_per_agent, 'EQUAL_DISTRIBUTION', true, p_folder_date);
+    v_details := v_details || jsonb_build_object('agent_id', v_agent_id, 'result', v_alloc_res);
+    IF (v_alloc_res->>'assigned_count')::integer > 0 THEN
+      v_successful_agents := v_successful_agents + 1;
+      v_total_assigned := v_total_assigned + (v_alloc_res->>'assigned_count')::integer;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'agents_count', v_successful_agents,
+    'total_assigned', v_total_assigned,
+    'details', v_details,
+    'message', 'Distributed ' || v_total_assigned || ' leads across ' || v_successful_agents || ' agents.'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_team_attendance_by_date(
+  p_company_id uuid,
+  p_work_date date
+)
+RETURNS TABLE (
+  employee_id uuid,
+  full_name text,
+  email text,
+  attendance_id uuid,
+  work_date date,
+  clock_in timestamptz,
+  clock_out timestamptz,
+  break_seconds integer,
+  break_started_at timestamptz,
+  status text,
+  note text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT 
+    p.id AS employee_id,
+    p.full_name,
+    p.email,
+    a.id AS attendance_id,
+    COALESCE(a.work_date, p_work_date) AS work_date,
+    a.clock_in,
+    a.clock_out,
+    COALESCE(a.break_seconds, 0) AS break_seconds,
+    a.break_started_at,
+    COALESCE(a.status, 'Absent') AS status,
+    a.note
+  FROM public.profiles p
+  JOIN public.user_roles ur ON ur.user_id = p.id
+  LEFT JOIN public.attendance a 
+    ON a.employee_id = p.id 
+    AND a.work_date = p_work_date
+  WHERE p.company_id = p_company_id
+    AND p.is_active = true
+    AND ur.role = 'agent'
+  ORDER BY p.full_name ASC, p.email ASC;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.allocate_lead_batch(uuid, uuid, integer, text, boolean, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.start_auto_assignment(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.pause_auto_assignment(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.stop_auto_assignment(uuid, boolean) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.distribute_leads_equally(uuid, uuid[], integer, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.get_team_attendance_by_date(uuid, date) TO authenticated, service_role;
+
+-- STRICT DUPLICATE PREVENTION & VALIDATION
+CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_company_mobile ON public.leads (company_id, mobile);
+
+CREATE OR REPLACE FUNCTION public.check_existing_mobiles(
+  p_company_id uuid,
+  p_mobiles text[]
+)
+RETURNS text[]
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(array_agg(mobile), '{}'::text[])
+  FROM public.leads
+  WHERE company_id = p_company_id
+    AND mobile = ANY(p_mobiles);
+$$;
+
+GRANT EXECUTE ON FUNCTION public.check_existing_mobiles(uuid, text[]) TO authenticated, service_role;
+
+-- 5. LIVE PRIORITY QUEUE PROCESSOR
+CREATE OR REPLACE FUNCTION public.process_live_priority_queue(
+  p_company_id uuid,
+  p_folder_date text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_status text := 'RUNNING';
+  v_agent record;
+  v_batch_size integer := 100;
+  v_total_assigned integer := 0;
+  v_allocated jsonb;
+  v_high_waiting integer := 0;
+  v_med_waiting integer := 0;
+  v_low_waiting integer := 0;
+  v_total_unassigned integer := 0;
+  v_total_assigned_count integer := 0;
+  v_agents_served integer := 0;
+BEGIN
+  -- 1. Check folder / company auto-assign state
+  SELECT COALESCE(auto_assign_status, 'RUNNING'), COALESCE(agent_lead_batch_size, 100)
+  INTO v_status, v_batch_size
+  FROM public.companies
+  WHERE id = p_company_id;
+
+  -- 2. If PAUSED or STOPPED, do not assign! Save leads in queue.
+  IF v_status != 'RUNNING' THEN
+    SELECT
+      COUNT(*) FILTER (WHERE priority = 'HIGH'),
+      COUNT(*) FILTER (WHERE priority = 'MEDIUM'),
+      COUNT(*) FILTER (WHERE priority = 'LOW'),
+      COUNT(*)
+    INTO v_high_waiting, v_med_waiting, v_low_waiting, v_total_unassigned
+    FROM public.leads
+    WHERE company_id = p_company_id
+      AND assigned_to IS NULL
+      AND status = 'New'
+      AND last_call_at IS NULL
+      AND (p_folder_date IS NULL OR folder_date::text = p_folder_date);
+
+    RETURN jsonb_build_object(
+      'success', true,
+      'status', v_status,
+      'assigned_count', 0,
+      'high_priority_waiting', v_high_waiting,
+      'medium_priority_waiting', v_med_waiting,
+      'low_priority_waiting', v_low_waiting,
+      'total_unassigned', v_total_unassigned,
+      'message', 'Folder is ' || v_status || '. Leads safely queued by priority without auto-assignment.'
+    );
+  END IF;
+
+  -- 3. If RUNNING: Assign leads prioritizing HIGH -> MEDIUM -> LOW
+  FOR v_agent IN
+    SELECT p.id, p.full_name
+    FROM public.profiles p
+    JOIN public.user_roles ur ON ur.user_id = p.id AND ur.role = 'agent' AND ur.company_id = p_company_id
+    WHERE p.company_id = p_company_id
+      AND COALESCE(p.is_active, true) = true
+    ORDER BY p.full_name ASC
+  LOOP
+    DECLARE
+      v_agent_pending integer := 0;
+    BEGIN
+      SELECT COUNT(*) INTO v_agent_pending
+      FROM public.leads
+      WHERE company_id = p_company_id
+        AND assigned_to = v_agent.id
+        AND status IN ('New', 'Assigned');
+
+      -- Only assign to available active agents who have room (do not interrupt ongoing calls)
+      IF v_agent_pending = 0 THEN
+        v_allocated := public.allocate_lead_batch(
+          p_company_id, v_agent.id, v_batch_size, 'LIVE_PRIORITY_DISPATCH', true, p_folder_date
+        );
+        IF (v_allocated->>'assigned_count')::integer > 0 THEN
+          v_total_assigned := v_total_assigned + (v_allocated->>'assigned_count')::integer;
+          v_agents_served := v_agents_served + 1;
+        END IF;
+      END IF;
+    END;
+  END LOOP;
+
+  -- 4. Calculate remaining queue counts
+  SELECT
+    COUNT(*) FILTER (WHERE priority = 'HIGH'),
+    COUNT(*) FILTER (WHERE priority = 'MEDIUM'),
+    COUNT(*) FILTER (WHERE priority = 'LOW'),
+    COUNT(*)
+  INTO v_high_waiting, v_med_waiting, v_low_waiting, v_total_unassigned
+  FROM public.leads
+  WHERE company_id = p_company_id
+    AND assigned_to IS NULL
+    AND status = 'New'
+    AND last_call_at IS NULL
+    AND (p_folder_date IS NULL OR folder_date::text = p_folder_date);
+
+  SELECT COUNT(*)
+  INTO v_total_assigned_count
+  FROM public.leads
+  WHERE company_id = p_company_id
+    AND assigned_to IS NOT NULL
+    AND (p_folder_date IS NULL OR folder_date::text = p_folder_date);
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'status', 'RUNNING',
+    'assigned_count', v_total_assigned,
+    'agents_served', v_agents_served,
+    'high_priority_waiting', v_high_waiting,
+    'medium_priority_waiting', v_med_waiting,
+    'low_priority_waiting', v_low_waiting,
+    'total_unassigned', v_total_unassigned,
+    'total_assigned', v_total_assigned_count,
+    'message', 'Live queue processed: ' || v_total_assigned || ' leads assigned across ' || v_agents_served || ' agents.'
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.process_live_priority_queue(uuid, text) TO authenticated, service_role;
+
+
+
+
 

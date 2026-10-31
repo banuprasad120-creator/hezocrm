@@ -73,6 +73,7 @@ export function CreateLeadDialog({
   const [assignedTo, setAssignedTo] = useState<string>(defaultAssignee);
   const [folderDate, setFolderDate] = useState<string>(defaultFolderDate || todayISO());
   const [notes, setNotes] = useState("");
+  const [priority, setPriority] = useState<"HIGH" | "MEDIUM" | "LOW">("LOW");
 
   // Update assignedTo whenever isAgentMode / employeeId changes or modal opens
   useState(() => {
@@ -108,6 +109,7 @@ export function CreateLeadDialog({
     setAssignedTo(isAgentMode && employeeId ? employeeId : "unassigned");
     setFolderDate(defaultFolderDate || todayISO());
     setNotes("");
+    setPriority("LOW");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -117,18 +119,20 @@ export function CreateLeadDialog({
       return;
     }
 
-    const trimmedName = customerName.trim();
     const digitsOnly = mobile.replace(/\D/g, "");
-
-    if (!trimmedName) {
-      toast.error("Please enter the customer's full name");
+    if (digitsOnly.length !== 10 || !/^[6-9]\d{9}$/.test(digitsOnly)) {
+      toast.error("Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9");
       return;
     }
 
-    if (digitsOnly.length < 10) {
-      toast.error("Please enter a valid 10-digit mobile number");
+    if (existingLead) {
+      toast.error(
+        `Duplicate mobile number! A lead already exists for "${existingLead.customer_name}" (${existingLead.status}).`
+      );
       return;
     }
+
+    const trimmedName = customerName.trim() || `Customer ${digitsOnly.slice(-4)}`;
 
     setSaving(true);
     try {
@@ -153,6 +157,7 @@ export function CreateLeadDialog({
           source: source || "External Lead / Direct",
           folderDate: folderDate || todayISO(),
           notes: formattedNotes,
+          priority,
           assignedTo: isAssigned ? assignedTo : null,
         },
       });
@@ -207,13 +212,16 @@ export function CreateLeadDialog({
         <form onSubmit={handleSubmit} className="space-y-4 pt-1 text-xs sm:text-sm">
           {/* Duplicate Mobile Banner */}
           {existingLead && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-400">
+            <div className="flex items-start gap-2.5 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold">Note: A lead with this mobile already exists!</p>
+                <p className="font-bold">Duplicate Mobile Blocked: Customer already exists!</p>
                 <p className="mt-0.5 text-[11px] opacity-90">
                   Customer: <strong>{existingLead.customer_name}</strong> · Status:{" "}
                   <strong>{existingLead.status}</strong> · Folder: {existingLead.folder_date}
+                </p>
+                <p className="mt-1 text-[10.5px] font-semibold text-destructive/80">
+                  Duplicate leads cannot be created. Please search for the existing lead or enter a new mobile number.
                 </p>
               </div>
             </div>
@@ -227,12 +235,11 @@ export function CreateLeadDialog({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Customer Full Name <span className="text-destructive">*</span></Label>
+                <Label className="text-xs font-semibold">Customer Full Name <span className="text-muted-foreground font-normal">(Optional)</span></Label>
                 <Input
-                  required
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="e.g. Ramesh Kumar"
+                  placeholder="e.g. Ramesh Kumar (or leave blank)"
                   className="h-9 bg-card"
                 />
               </div>
@@ -274,6 +281,31 @@ export function CreateLeadDialog({
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <Label className="text-xs font-semibold flex items-center justify-between">
+                <span>Lead Priority</span>
+                <span className="text-[10px] text-muted-foreground font-normal">Higher priority leads queue first</span>
+              </Label>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  ["HIGH", "⚡ HIGH", "border-rose-500/40 text-rose-600 dark:text-rose-400 bg-rose-500/10"],
+                  ["MEDIUM", "🔶 MEDIUM", "border-amber-500/40 text-amber-600 dark:text-amber-400 bg-amber-500/10"],
+                  ["LOW", "🔷 LOW", "border-slate-500/40 text-slate-600 dark:text-slate-400 bg-slate-500/10"],
+                ] as const).map(([val, label, activeCls]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setPriority(val)}
+                    className={`rounded-lg border px-2 py-1.5 text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                      priority === val ? `${activeCls} ring-1 ring-primary shadow-xs` : "bg-card hover:bg-muted/40 text-muted-foreground"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -422,7 +454,7 @@ export function CreateLeadDialog({
             </Button>
             <Button
               type="submit"
-              disabled={saving || !customerName.trim() || cleanMobile.length < 10}
+              disabled={saving || cleanMobile.length !== 10 || !/^[6-9]\d{9}$/.test(cleanMobile) || Boolean(existingLead)}
               className="gradient-brand text-white font-bold gap-1.5 shadow-sm"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
