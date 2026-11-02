@@ -405,3 +405,4 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.set_auto_assign_folder(uuid, text) TO authenticated, service_role;
+

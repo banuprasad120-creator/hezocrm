@@ -260,6 +260,9 @@ export type Database = {
           created_at: string
           current_batch: number
           duplicate_count: number
+          existing_count: number
+          reassigned_count: number
+          strategy: string | null
           error_count: number
           file_name: string
           folder_date: string
@@ -278,6 +281,9 @@ export type Database = {
           created_at?: string
           current_batch?: number
           duplicate_count?: number
+          existing_count?: number
+          reassigned_count?: number
+          strategy?: string | null
           error_count?: number
           file_name: string
           folder_date: string
@@ -296,6 +302,9 @@ export type Database = {
           created_at?: string
           current_batch?: number
           duplicate_count?: number
+          existing_count?: number
+          reassigned_count?: number
+          strategy?: string | null
           error_count?: number
           file_name?: string
           folder_date?: string

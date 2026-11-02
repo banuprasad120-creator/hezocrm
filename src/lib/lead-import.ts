@@ -162,18 +162,36 @@ export type LeadDraft = {
   priority: LeadPriority;
 };
 
+export type ExistingLeadRecord = {
+  id: string;
+  mobile: string;
+  customer_name: string;
+  status: string;
+  assigned_to: string | null;
+  agent_name?: string | null;
+  folder_date: string | null;
+  last_call_at: string | null;
+  notes: string | null;
+  priority: LeadPriority;
+  loan_amount?: number | null;
+  loan_type?: string | null;
+};
+
 export type ValidatedRow = {
   rowNumber: number;
   draft: LeadDraft;
   errors: string[];
   duplicateInFile: boolean;
   duplicateExisting: boolean;
+  existingRecord?: ExistingLeadRecord | null;
 };
 
 export type ValidationSummary = {
   rows: ValidatedRow[];
   total: number;
   valid: number;
+  newCount: number;
+  existingCount: number;
   errorCount: number;
   duplicateInFile: number;
   duplicateExisting: number;
@@ -291,9 +309,26 @@ export async function buildRowsProgressive(
   return out;
 }
 
-export function applyExistingDuplicates(rows: ValidatedRow[], existingMobiles: Set<string>): ValidationSummary {
+export function applyExistingDuplicates(
+  rows: ValidatedRow[],
+  existing: Set<string> | Map<string, ExistingLeadRecord>,
+): ValidationSummary {
+  const isMap = existing instanceof Map;
   for (const r of rows) {
-    r.duplicateExisting = r.errors.length === 0 && existingMobiles.has(r.draft.mobile);
+    if (r.errors.length > 0) continue;
+    if (isMap) {
+      const rec = (existing as Map<string, ExistingLeadRecord>).get(r.draft.mobile);
+      if (rec) {
+        r.duplicateExisting = true;
+        r.existingRecord = rec;
+      } else {
+        r.duplicateExisting = false;
+        r.existingRecord = null;
+      }
+    } else {
+      r.duplicateExisting = (existing as Set<string>).has(r.draft.mobile);
+      r.existingRecord = null;
+    }
   }
   return summarize(rows);
 }
@@ -311,7 +346,19 @@ export function summarize(rows: ValidatedRow[]): ValidationSummary {
     else if (r.draft.priority === "MEDIUM") mediumCount++;
     else lowCount++;
   }
-  return { rows, total: rows.length, valid, errorCount, duplicateInFile, duplicateExisting, highCount, mediumCount, lowCount };
+  return {
+    rows,
+    total: rows.length,
+    valid,
+    newCount: valid,
+    existingCount: duplicateExisting,
+    errorCount,
+    duplicateInFile,
+    duplicateExisting,
+    highCount,
+    mediumCount,
+    lowCount,
+  };
 }
 
 
@@ -330,15 +377,18 @@ export function downloadSampleFile() {
 
 export function downloadErrorReport(rows: ValidatedRow[], fileName: string) {
   const failed = rows.filter((r) => r.errors.length > 0 || r.duplicateInFile || r.duplicateExisting);
-  const aoa: (string | number)[][] = [["Row Number", "Customer Name", "Mobile Number", "Rejection Reason", "Status"]];
+  const aoa: (string | number)[][] = [["Row Number", "Customer Name", "Mobile Number", "Rejection Reason", "Status", "Existing CRM Details"]];
   for (const r of failed) {
     const reasons = [
       ...r.errors,
       r.duplicateInFile ? "Duplicate inside uploaded file" : "",
       r.duplicateExisting ? "Duplicate lead already exists in CRM database" : "",
     ].filter(Boolean);
-    const status = r.errors.length > 0 ? "Validation Error" : "Duplicate Skipped";
-    aoa.push([r.rowNumber, r.draft.customer_name, r.draft.mobile, reasons.join("; "), status]);
+    const status = r.errors.length > 0 ? "Validation Error" : r.duplicateInFile ? "File Duplicate" : "Existing CRM Lead";
+    const existingInfo = r.existingRecord
+      ? `Folder: ${r.existingRecord.folder_date || "—"} | Status: ${r.existingRecord.status} | Agent: ${r.existingRecord.agent_name || "Unassigned"} | Priority: ${r.existingRecord.priority}`
+      : "";
+    aoa.push([r.rowNumber, r.draft.customer_name, r.draft.mobile, reasons.join("; "), status, existingInfo]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   // Keep mobile numbers as text so Excel never reformats them to scientific notation.
@@ -346,7 +396,7 @@ export function downloadErrorReport(rows: ValidatedRow[], fileName: string) {
     const ref = XLSX.utils.encode_cell({ r, c: 2 });
     if (ws[ref]) { ws[ref].t = "s"; ws[ref].v = String(ws[ref].v ?? ""); ws[ref].z = "@"; }
   }
-  ws["!cols"] = [{ wch: 12 }, { wch: 24 }, { wch: 18 }, { wch: 50 }, { wch: 20 }];
+  ws["!cols"] = [{ wch: 12 }, { wch: 24 }, { wch: 18 }, { wch: 45 }, { wch: 20 }, { wch: 40 }];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Skipped & Errors");

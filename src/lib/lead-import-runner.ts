@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import type { ValidatedRow } from "@/lib/lead-import";
+import type { ValidatedRow, ExistingLeadRecord } from "@/lib/lead-import";
 
 /** Configurable batch size for bulk inserts. 500 is safe for the Data API payload limit. */
 export const IMPORT_BATCH_SIZE = 500;
@@ -69,6 +69,102 @@ export async function fetchExistingMobiles(
   return existing;
 }
 
+/**
+ * Detailed duplicate and existing lead lookup scoped to company.
+ * Fetches full record metadata: id, customer_name, status, assigned agent, folder_date, last_call_at, notes, priority.
+ * Used for previewing existing/old data and allowing admins to choose whether to retain or reassign.
+ */
+export async function fetchExistingLeadsDetails(
+  companyId: string,
+  mobiles: string[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<Map<string, ExistingLeadRecord>> {
+  const unique = [...new Set(mobiles.filter(Boolean))];
+  const existingMap = new Map<string, ExistingLeadRecord>();
+  if (unique.length === 0) return existingMap;
+
+  for (let i = 0; i < unique.length; i += DUPLICATE_LOOKUP_CHUNK) {
+    const chunk = unique.slice(i, i + DUPLICATE_LOOKUP_CHUNK);
+
+    try {
+      const { data, error } = await supabase
+        .from("leads")
+        .select("id, mobile, customer_name, status, assigned_to, folder_date, last_call_at, notes, priority, loan_amount, loan_type")
+        .eq("company_id", companyId)
+        .in("mobile", chunk);
+
+      if (error) throw asError(error, "Could not check existing leads details");
+
+      // For assigned leads, fetch agent names in batch
+      const assignedUserIds = [...new Set((data ?? []).map((d) => d.assigned_to).filter(Boolean))] as string[];
+      let agentNameMap = new Map<string, string>();
+
+      if (assignedUserIds.length > 0) {
+        const { data: profs } = await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .in("id", assignedUserIds);
+        if (profs) {
+          for (const p of profs) {
+            agentNameMap.set(p.id, p.full_name || p.email);
+          }
+        }
+      }
+
+      for (const row of data ?? []) {
+        existingMap.set(row.mobile, {
+          id: row.id,
+          mobile: row.mobile,
+          customer_name: row.customer_name,
+          status: row.status,
+          assigned_to: row.assigned_to,
+          agent_name: row.assigned_to ? agentNameMap.get(row.assigned_to) || "Assigned Agent" : null,
+          folder_date: row.folder_date,
+          last_call_at: row.last_call_at,
+          notes: row.notes,
+          priority: (row.priority as any) || "LOW",
+          loan_amount: row.loan_amount,
+          loan_type: row.loan_type,
+        });
+      }
+    } catch (err) {
+      console.warn("[import-runner] fetchExistingLeadsDetails chunk warning:", err);
+    }
+
+    onProgress?.(Math.min(i + chunk.length, unique.length), unique.length);
+    await yieldToBrowser();
+  }
+  return existingMap;
+}
+
+export type ExistingLeadsAction = "RETAIN" | "REASSIGN_TO_QUEUE" | "REASSIGN_TO_AGENT";
+
+export async function executeExistingLeadsStrategy(params: {
+  companyId: string;
+  adminId: string | null;
+  leadIds: string[];
+  action: ExistingLeadsAction;
+  targetFolder?: string;
+  targetAgentId?: string | null;
+  appendNotes?: string;
+}): Promise<{ success: boolean; count: number; message: string }> {
+  if (params.leadIds.length === 0 || params.action === "RETAIN") {
+    return { success: true, count: params.leadIds.length, message: `Retained existing assignments for ${params.leadIds.length} leads.` };
+  }
+
+  const { data, error } = await (supabase.rpc as any)("handle_existing_leads_action", {
+    p_company_id: params.companyId,
+    p_admin_id: params.adminId,
+    p_lead_ids: params.leadIds,
+    p_action: params.action,
+    p_target_folder: params.targetFolder || null,
+    p_target_agent_id: params.targetAgentId || null,
+    p_append_notes: params.appendNotes || null,
+  });
+
+  if (error) throw new Error(error.message || "Failed to execute existing leads strategy");
+  return data;
+}
 
 export type BatchState = {
   index: number;
@@ -98,9 +194,15 @@ export type ImportContext = {
   folderDate: string;
   fileName: string;
   importId: string;
-  rows: ValidatedRow[]; // importable rows only
+  rows: ValidatedRow[]; // importable new rows
+  existingRows?: ValidatedRow[]; // rows that match existing CRM records
+  existingLeadIds?: string[];
+  existingStrategy?: ExistingLeadsAction;
+  targetAgentId?: string | null;
   totalRows: number; // rows in the file
   duplicates: number;
+  existingCount: number;
+  reassignedCount: number;
   errors: number;
 };
 
@@ -154,6 +256,9 @@ export async function createImportRecord(ctx: ImportContext, totalBatches: numbe
     total_rows: ctx.totalRows,
     imported_count: 0,
     duplicate_count: ctx.duplicates,
+    existing_count: ctx.existingCount || 0,
+    reassigned_count: ctx.reassignedCount || 0,
+    strategy: ctx.existingStrategy || "retain",
     error_count: ctx.errors,
     processed_rows: 0,
     current_batch: 0,
@@ -166,6 +271,9 @@ export async function createImportRecord(ctx: ImportContext, totalBatches: numbe
 export type ImportPatch = Partial<{
   imported_count: number;
   duplicate_count: number;
+  existing_count: number;
+  reassigned_count: number;
+  strategy: string;
   error_count: number;
   processed_rows: number;
   current_batch: number;

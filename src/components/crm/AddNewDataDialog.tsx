@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle, CheckCircle2, Database, Download, FileSpreadsheet,
-  Flame, Loader2, Phone, Play, Plus, PlusCircle, Sparkles, Upload, User, UserPlus
+  Flame, History, Loader2, Phone, Play, Plus, PlusCircle, RotateCcw, ShieldCheck, Sparkles, Upload, User, UserPlus
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -87,19 +87,52 @@ export function AddNewDataDialog({
 
   // Live duplicate check for single entry
   const cleanMobile = mobile.replace(/\D/g, "");
+  const [movingExisting, setMovingExisting] = useState(false);
   const { data: existingLead } = useQuery({
     queryKey: ["check-duplicate-mobile-add-data", companyId, cleanMobile],
     enabled: Boolean(companyId && cleanMobile.length >= 8 && open),
     queryFn: async () => {
       const { data } = await supabase
         .from("leads")
-        .select("id, customer_name, mobile, status, assigned_to, folder_date")
+        .select("id, customer_name, mobile, status, assigned_to, folder_date, last_call_at, notes")
         .eq("company_id", companyId!)
         .eq("mobile", cleanMobile)
         .maybeSingle();
       return data;
     },
   });
+
+  const handleMoveExistingToQueue = async () => {
+    if (!companyId || !existingLead) return;
+    setMovingExisting(true);
+    try {
+      const { data: res, error } = await (supabase.rpc as any)("handle_existing_leads_action", {
+        p_company_id: companyId,
+        p_admin_id: adminUserId || null,
+        p_lead_ids: [existingLead.id],
+        p_action: "REASSIGN_TO_QUEUE",
+        p_target_folder: folderDate,
+        p_append_notes: notes.trim() ? `[Re-queued to Folder ${folderDate}]: ${notes.trim()}` : null,
+      });
+
+      if (error) throw error;
+
+      if (res?.success) {
+        toast.success(`🎉 Lead "${existingLead.customer_name}" moved to folder ${folderDate} queue!`);
+        qc.invalidateQueries({ queryKey: ["all-leads"] });
+        qc.invalidateQueries({ queryKey: ["daily-leads"] });
+        qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+        resetSingleForm();
+        onSuccess?.();
+      } else {
+        toast.error(res?.message || "Could not move existing lead");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to move lead");
+    } finally {
+      setMovingExisting(false);
+    }
+  };
 
   const resetSingleForm = () => {
     setCustomerName("");
@@ -409,11 +442,52 @@ export function AddNewDataDialog({
                         value={mobile}
                         onChange={(e) => setMobile(e.target.value.replace(/\D/g, ""))}
                         className={`h-9 pl-9 text-xs font-mono font-semibold ${
-                          existingLead ? "border-destructive ring-1 ring-destructive/30" : ""
+                          existingLead ? "border-amber-500 ring-1 ring-amber-500/30" : ""
                         }`}
                         required
                       />
                     </div>
+
+                    {existingLead && (
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs space-y-2 mt-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                              <History className="h-3.5 w-3.5" /> Existing Lead Found
+                            </p>
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              <b>{existingLead.customer_name}</b> · Folder: {existingLead.folder_date || "—"} · Status: {existingLead.status}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-[10px] font-semibold rounded-md border border-amber-500/30 px-2 py-0.5 bg-amber-500/15 text-amber-600 dark:text-amber-300">
+                            {existingLead.last_call_at ? "Has Call History" : "Never Contacted"}
+                          </span>
+                        </div>
+
+                        {!existingLead.last_call_at ? (
+                          <div className="pt-1 border-t border-amber-500/20 flex items-center justify-between gap-2">
+                            <span className="text-[11px] text-muted-foreground">
+                              Uncalled lead: safe to move to folder {folderDate} queue.
+                            </span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={handleMoveExistingToQueue}
+                              disabled={movingExisting}
+                              className="h-7 text-xs font-bold border-amber-500/40 text-amber-600 hover:bg-amber-500/15 gap-1 shrink-0"
+                            >
+                              {movingExisting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                              <span>Move to Queue</span>
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-muted-foreground italic pt-1 border-t border-amber-500/20">
+                            🔒 Lead has ongoing call history and cannot be overwritten. Existing notes and assignment are preserved.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Alternate Phone */}
