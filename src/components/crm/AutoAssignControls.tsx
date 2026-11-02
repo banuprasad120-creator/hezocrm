@@ -25,9 +25,10 @@ interface AutoAssignControlsProps {
   companyId: string;
   variant?: "toolbar" | "card";
   onAddNewData?: () => void;
+  folderDate?: string | null;
 }
 
-export function AutoAssignControls({ companyId, variant = "toolbar", onAddNewData }: AutoAssignControlsProps) {
+export function AutoAssignControls({ companyId, variant = "toolbar", onAddNewData, folderDate }: AutoAssignControlsProps) {
   const qc = useQueryClient();
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
@@ -44,12 +45,14 @@ export function AutoAssignControls({ companyId, variant = "toolbar", onAddNewDat
   const handleStart = async () => {
     setLoadingAction("start");
     try {
-      const res = await startAutoAssignment(companyId);
+      const res = await startAutoAssignment(companyId, folderDate);
       toast.success("⚡ Auto-Assign Started!", {
         description: res.message || "Active agents with zero pending leads have been refilled.",
       });
       qc.invalidateQueries({ queryKey: ["batch-settings"] });
       qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
+      qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
       qc.invalidateQueries({ queryKey: ["leads"] });
       qc.invalidateQueries({ queryKey: ["monitoring"] });
     } catch (err) {
@@ -69,6 +72,7 @@ export function AutoAssignControls({ companyId, variant = "toolbar", onAddNewDat
         description: res.message || "Automatic refills are on hold. Existing agent leads remain intact.",
       });
       qc.invalidateQueries({ queryKey: ["batch-settings"] });
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
       qc.invalidateQueries({ queryKey: ["daily-leads"] });
       qc.invalidateQueries({ queryKey: ["leads"] });
       qc.invalidateQueries({ queryKey: ["monitoring"] });
@@ -84,13 +88,14 @@ export function AutoAssignControls({ companyId, variant = "toolbar", onAddNewDat
   const handleConfirmStop = async () => {
     setLoadingAction("stop");
     try {
-      const res = await stopAutoAssignment(companyId, recallUncontacted);
+      const res = await stopAutoAssignment(companyId, recallUncontacted, folderDate);
       toast.warning("⏹️ Auto-Assign Stopped", {
         description: res.message || "Auto-assign is fully stopped.",
       });
       setStopDialogOpen(false);
       setRecallUncontacted(true);
       qc.invalidateQueries({ queryKey: ["batch-settings"] });
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
       qc.invalidateQueries({ queryKey: ["daily-leads"] });
       qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
       qc.invalidateQueries({ queryKey: ["my-leads"] });

@@ -134,6 +134,7 @@ export type Database = {
           auto_assign_status: string
           lead_batch_automation_enabled: boolean
           agent_lead_batch_size: number
+          active_auto_assign_folder: string | null
         }
         Insert: {
           created_at?: string
@@ -144,6 +145,7 @@ export type Database = {
           auto_assign_status?: string
           lead_batch_automation_enabled?: boolean
           agent_lead_batch_size?: number
+          active_auto_assign_folder?: string | null
         }
         Update: {
           created_at?: string
@@ -154,6 +156,7 @@ export type Database = {
           auto_assign_status?: string
           lead_batch_automation_enabled?: boolean
           agent_lead_batch_size?: number
+          active_auto_assign_folder?: string | null
         }
         Relationships: []
       }

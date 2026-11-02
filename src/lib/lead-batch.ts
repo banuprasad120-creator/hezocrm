@@ -21,12 +21,14 @@ export interface CompanyBatchSettings {
   enabled: boolean;
   batchSize: number;
   status: AutoAssignStatus;
+  activeFolder?: string | null;
 }
 
 export interface ControlActionResult {
   success: boolean;
   status: AutoAssignStatus;
   message: string;
+  folder?: string | null;
   agents_refilled?: number;
   total_leads_assigned?: number;
   recalled_count?: number;
@@ -47,12 +49,12 @@ export async function getCompanyBatchSettings(companyId: string): Promise<Compan
   try {
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { data, error } = await (supabase.from as any)("companies")
-      .select("lead_batch_automation_enabled, agent_lead_batch_size, auto_assign_status")
+      .select("lead_batch_automation_enabled, agent_lead_batch_size, auto_assign_status, active_auto_assign_folder")
       .eq("id", companyId)
       .maybeSingle();
 
     if (error || !data) {
-      return { enabled: true, batchSize: 100, status: "RUNNING" };
+      return { enabled: true, batchSize: 100, status: "RUNNING", activeFolder: null };
     }
 
     const rawStatus = (data.auto_assign_status as string) || (data.lead_batch_automation_enabled ? "RUNNING" : "PAUSED");
@@ -62,9 +64,10 @@ export async function getCompanyBatchSettings(companyId: string): Promise<Compan
       enabled: status === "RUNNING",
       batchSize: Number(data.agent_lead_batch_size) || 100,
       status,
+      activeFolder: (data.active_auto_assign_folder as string) || null,
     };
   } catch {
-    return { enabled: true, batchSize: 100, status: "RUNNING" };
+    return { enabled: true, batchSize: 100, status: "RUNNING", activeFolder: null };
   }
 }
 
@@ -75,39 +78,87 @@ export async function updateCompanyBatchSettings(
   companyId: string,
   enabled: boolean,
   batchSize: number,
-  status?: AutoAssignStatus
+  status?: AutoAssignStatus,
+  activeFolder?: string | null
 ): Promise<void> {
   const currentStatus: AutoAssignStatus = status ?? (enabled ? "RUNNING" : "PAUSED");
   /* eslint-disable @typescript-eslint/no-explicit-any */
+  const payload: any = {
+    lead_batch_automation_enabled: currentStatus === "RUNNING",
+    auto_assign_status: currentStatus,
+    agent_lead_batch_size: Math.max(1, batchSize),
+  };
+  if (activeFolder !== undefined) {
+    payload.active_auto_assign_folder = activeFolder && activeFolder !== "all" ? activeFolder : null;
+  }
   const { error } = await (supabase.from as any)("companies")
-    .update({
-      lead_batch_automation_enabled: currentStatus === "RUNNING",
-      auto_assign_status: currentStatus,
-      agent_lead_batch_size: Math.max(1, batchSize),
-    })
+    .update(payload)
     .eq("id", companyId);
 
   if (error) throw error;
 }
 
 /**
- * Start Auto-Assignment (RUNNING):
- * Sets status to RUNNING and immediately triggers batch allocation for all active agents with 0 pending leads.
+ * Set active folder target for auto-assignment.
  */
-export async function startAutoAssignment(companyId: string): Promise<ControlActionResult> {
+export async function setActiveAutoAssignFolder(
+  companyId: string,
+  folderDate: string | null
+): Promise<ControlActionResult> {
   try {
+    const cleanFolder = folderDate && folderDate !== "all" ? folderDate : null;
     /* eslint-disable @typescript-eslint/no-explicit-any */
-    const { data, error } = await (supabase.rpc as any)("start_auto_assignment", {
+    const { data, error } = await (supabase.rpc as any)("set_auto_assign_folder", {
       p_company_id: companyId,
+      p_folder_date: cleanFolder,
     });
     if (error) throw error;
-    return (data as ControlActionResult) || { success: true, status: "RUNNING", message: "Auto-assign started." };
-  } catch (err) {
-    // Fallback: update status directly
-    await updateCompanyBatchSettings(companyId, true, 100, "RUNNING");
+    return (data as ControlActionResult) || {
+      success: true,
+      status: "RUNNING",
+      folder: cleanFolder,
+      message: `Auto-assign folder set to ${cleanFolder || "all folders"}.`,
+    };
+  } catch {
+    await updateCompanyBatchSettings(companyId, true, 100, undefined, folderDate);
     return {
       success: true,
       status: "RUNNING",
+      folder: folderDate,
+      message: `Auto-assign target folder updated to ${folderDate || "all folders"}.`,
+    };
+  }
+}
+
+/**
+ * Start Auto-Assignment (RUNNING):
+ * Sets status to RUNNING and immediately triggers batch allocation for all active agents with 0 pending leads.
+ */
+export async function startAutoAssignment(
+  companyId: string,
+  folderDate?: string | null
+): Promise<ControlActionResult> {
+  try {
+    const cleanFolder = folderDate && folderDate !== "all" ? folderDate : null;
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const { data, error } = await (supabase.rpc as any)("start_auto_assignment", {
+      p_company_id: companyId,
+      p_folder_date: cleanFolder,
+    });
+    if (error) throw error;
+    return (data as ControlActionResult) || {
+      success: true,
+      status: "RUNNING",
+      folder: cleanFolder,
+      message: `Auto-assign started for ${cleanFolder || "all folders"}.`,
+    };
+  } catch (err) {
+    // Fallback: update status directly
+    await updateCompanyBatchSettings(companyId, true, 100, "RUNNING", folderDate);
+    return {
+      success: true,
+      status: "RUNNING",
+      folder: folderDate,
       message: err instanceof Error ? err.message : "Auto-assign started.",
     };
   }
@@ -137,27 +188,39 @@ export async function pauseAutoAssignment(companyId: string): Promise<ControlAct
  */
 export async function stopAutoAssignment(
   companyId: string,
-  recallUncontacted = true
+  recallUncontacted = true,
+  folderDate?: string | null
 ): Promise<ControlActionResult> {
   try {
+    const cleanFolder = folderDate && folderDate !== "all" ? folderDate : null;
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { data, error } = await (supabase.rpc as any)("stop_auto_assignment", {
       p_company_id: companyId,
       p_recall_uncontacted: Boolean(recallUncontacted),
+      p_folder_date: cleanFolder,
     });
     if (error) throw error;
-    return (data as ControlActionResult) || { success: true, status: "STOPPED", message: "Auto-assign stopped." };
+    return (data as ControlActionResult) || {
+      success: true,
+      status: "STOPPED",
+      folder: cleanFolder,
+      message: "Auto-assign stopped.",
+    };
   } catch {
     await updateCompanyBatchSettings(companyId, false, 100, "STOPPED");
     let recalledCount = 0;
     if (recallUncontacted) {
       /* eslint-disable @typescript-eslint/no-explicit-any */
-      const { data: recalled } = await (supabase.from as any)("leads")
+      let query = (supabase.from as any)("leads")
         .update({ assigned_to: null, status: "New", assigned_at: null })
         .eq("company_id", companyId)
         .eq("status", "Assigned")
-        .is("last_call_at", null)
-        .select("id");
+        .is("last_call_at", null);
+
+      if (folderDate && folderDate !== "all") {
+        query = query.eq("folder_date", folderDate);
+      }
+      const { data: recalled } = await query.select("id");
       recalledCount = recalled?.length ?? 0;
 
       await (supabase.from as any)("lead_batches")
@@ -168,6 +231,7 @@ export async function stopAutoAssignment(
     return {
       success: true,
       status: "STOPPED",
+      folder: folderDate,
       recalled_count: recalledCount,
       message: "Auto-assign stopped." + (recalledCount > 0 ? ` ${recalledCount} uncontacted leads recalled to queue.` : ""),
     };

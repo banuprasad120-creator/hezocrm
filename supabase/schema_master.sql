@@ -710,7 +710,8 @@ CREATE TRIGGER tr_auto_confirm_user
 ALTER TABLE public.companies 
   ADD COLUMN IF NOT EXISTS auto_assign_status text NOT NULL DEFAULT 'RUNNING',
   ADD COLUMN IF NOT EXISTS lead_batch_automation_enabled boolean NOT NULL DEFAULT true,
-  ADD COLUMN IF NOT EXISTS agent_lead_batch_size integer NOT NULL DEFAULT 100;
+  ADD COLUMN IF NOT EXISTS agent_lead_batch_size integer NOT NULL DEFAULT 100,
+  ADD COLUMN IF NOT EXISTS active_auto_assign_folder text DEFAULT NULL;
 
 CREATE TABLE IF NOT EXISTS public.lead_batches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -791,10 +792,12 @@ DECLARE
   v_is_active boolean := true;
   v_auto_status text := 'RUNNING';
   v_auto_enabled boolean := true;
+  v_company_active_folder text := NULL;
+  v_effective_folder text := NULL;
 BEGIN
   -- Strict check: if auto assignment is STOPPED or PAUSED, block automatic batch refill or assignment
-  SELECT COALESCE(auto_assign_status, 'RUNNING'), COALESCE(lead_batch_automation_enabled, true)
-  INTO v_auto_status, v_auto_enabled
+  SELECT COALESCE(auto_assign_status, 'RUNNING'), COALESCE(lead_batch_automation_enabled, true), active_auto_assign_folder
+  INTO v_auto_status, v_auto_enabled, v_company_active_folder
   FROM public.companies
   WHERE id = p_company_id;
 
@@ -846,7 +849,13 @@ BEGIN
   FROM public.lead_batches
   WHERE company_id = p_company_id AND employee_id = p_employee_id;
 
-  IF p_folder_date IS NOT NULL AND p_folder_date != '' AND p_folder_date != 'all' THEN
+  -- Determine effective folder: explicit param > company active_auto_assign_folder
+  v_effective_folder := COALESCE(
+    CASE WHEN p_folder_date IS NOT NULL AND p_folder_date != '' AND p_folder_date != 'all' THEN p_folder_date ELSE NULL END,
+    CASE WHEN v_company_active_folder IS NOT NULL AND v_company_active_folder != '' AND v_company_active_folder != 'all' THEN v_company_active_folder ELSE NULL END
+  );
+
+  IF v_effective_folder IS NOT NULL THEN
     SELECT ARRAY_AGG(id), ARRAY_AGG(mobile)
     INTO v_lead_ids, v_lead_mobiles
     FROM (
@@ -856,36 +865,36 @@ BEGIN
         AND assigned_to IS NULL
         AND status = 'New'
         AND last_call_at IS NULL
-        AND folder_date::text LIKE (p_folder_date || '%')
-          ORDER BY
-            CASE priority
-              WHEN 'HIGH' THEN 1
-              WHEN 'MEDIUM' THEN 2
-              WHEN 'LOW' THEN 3
-              ELSE 4
-            END ASC,
-            created_at ASC
-          LIMIT GREATEST(1, p_batch_size)
-          FOR UPDATE SKIP LOCKED
-        ) t;
-      ELSE
-        SELECT ARRAY_AGG(id), ARRAY_AGG(mobile)
-        INTO v_lead_ids, v_lead_mobiles
-        FROM (
-          SELECT id, mobile
-          FROM public.leads
-          WHERE company_id = p_company_id
-            AND assigned_to IS NULL
-            AND status = 'New'
-            AND last_call_at IS NULL
-          ORDER BY
-            CASE priority
-              WHEN 'HIGH' THEN 1
-              WHEN 'MEDIUM' THEN 2
-              WHEN 'LOW' THEN 3
-              ELSE 4
-            END ASC,
-            created_at ASC
+        AND folder_date::text LIKE (v_effective_folder || '%')
+      ORDER BY
+        CASE priority
+          WHEN 'HIGH' THEN 1
+          WHEN 'MEDIUM' THEN 2
+          WHEN 'LOW' THEN 3
+          ELSE 4
+        END ASC,
+        created_at ASC
+      LIMIT GREATEST(1, p_batch_size)
+      FOR UPDATE SKIP LOCKED
+    ) t;
+  ELSE
+    SELECT ARRAY_AGG(id), ARRAY_AGG(mobile)
+    INTO v_lead_ids, v_lead_mobiles
+    FROM (
+      SELECT id, mobile
+      FROM public.leads
+      WHERE company_id = p_company_id
+        AND assigned_to IS NULL
+        AND status = 'New'
+        AND last_call_at IS NULL
+      ORDER BY
+        CASE priority
+          WHEN 'HIGH' THEN 1
+          WHEN 'MEDIUM' THEN 2
+          WHEN 'LOW' THEN 3
+          ELSE 4
+        END ASC,
+        created_at ASC
       LIMIT GREATEST(1, p_batch_size)
       FOR UPDATE SKIP LOCKED
     ) t;
@@ -1046,7 +1055,10 @@ FOR EACH ROW
 EXECUTE FUNCTION public.check_and_refill_agent_batch_on_call();
 
 -- Tri-State Controls RPCs
-CREATE OR REPLACE FUNCTION public.start_auto_assignment(p_company_id uuid)
+CREATE OR REPLACE FUNCTION public.start_auto_assignment(
+  p_company_id uuid,
+  p_folder_date text DEFAULT NULL
+)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   v_batch_size integer := 100;
@@ -1055,10 +1067,19 @@ DECLARE
   v_total_assigned integer := 0;
   v_alloc_res jsonb;
   v_pending integer;
+  v_target_folder text := NULL;
 BEGIN
+  IF p_folder_date IS NOT NULL AND p_folder_date != '' AND p_folder_date != 'all' THEN
+    v_target_folder := p_folder_date;
+  ELSE
+    SELECT active_auto_assign_folder INTO v_target_folder
+    FROM public.companies WHERE id = p_company_id;
+  END IF;
+
   UPDATE public.companies
   SET auto_assign_status = 'RUNNING',
-      lead_batch_automation_enabled = true
+      lead_batch_automation_enabled = true,
+      active_auto_assign_folder = v_target_folder
   WHERE id = p_company_id
   RETURNING COALESCE(agent_lead_batch_size, 100) INTO v_batch_size;
 
@@ -1069,6 +1090,7 @@ BEGIN
     WHERE p.company_id = p_company_id
       AND p.is_active = true
       AND ur.role = 'agent'
+    ORDER BY p.full_name ASC
   LOOP
     SELECT COUNT(*) INTO v_pending
     FROM public.leads
@@ -1077,7 +1099,7 @@ BEGIN
       AND status IN ('New', 'Assigned');
 
     IF v_pending = 0 THEN
-      v_alloc_res := public.allocate_lead_batch(p_company_id, v_agent.id, v_batch_size, 'START_AUTO_ASSIGN', false, NULL);
+      v_alloc_res := public.allocate_lead_batch(p_company_id, v_agent.id, v_batch_size, 'START_AUTO_ASSIGN', false, v_target_folder);
       IF (v_alloc_res->>'assigned_count')::integer > 0 THEN
         v_refilled_agents := v_refilled_agents + 1;
         v_total_assigned := v_total_assigned + (v_alloc_res->>'assigned_count')::integer;
@@ -1088,9 +1110,10 @@ BEGIN
   RETURN jsonb_build_object(
     'success', true,
     'status', 'RUNNING',
+    'folder', v_target_folder,
     'agents_refilled', v_refilled_agents,
     'total_leads_assigned', v_total_assigned,
-    'message', 'Auto-assign started. ' || v_refilled_agents || ' agents allocated ' || v_total_assigned || ' leads immediately.'
+    'message', 'Auto-assign started for ' || COALESCE('folder ' || v_target_folder, 'all folders') || '. ' || v_refilled_agents || ' agents allocated ' || v_total_assigned || ' leads immediately.'
   );
 END;
 $$;
@@ -1111,32 +1134,57 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.stop_auto_assignment(p_company_id uuid, p_recall_uncontacted boolean DEFAULT true)
+CREATE OR REPLACE FUNCTION public.stop_auto_assignment(
+  p_company_id uuid,
+  p_recall_uncontacted boolean DEFAULT true,
+  p_folder_date text DEFAULT NULL
+)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   v_recalled_count integer := 0;
+  v_target_folder text := NULL;
 BEGIN
+  IF p_folder_date IS NOT NULL AND p_folder_date != '' AND p_folder_date != 'all' THEN
+    v_target_folder := p_folder_date;
+  END IF;
+
   UPDATE public.companies
   SET auto_assign_status = 'STOPPED',
       lead_batch_automation_enabled = false
   WHERE id = p_company_id;
 
   IF COALESCE(p_recall_uncontacted, true) THEN
-    WITH recalled AS (
-      UPDATE public.leads
-      SET assigned_to = NULL,
-          status = 'New',
-          assigned_at = NULL
-      WHERE company_id = p_company_id
-        AND assigned_to IS NOT NULL
-        AND status = 'Assigned'
-        AND last_call_at IS NULL
-      RETURNING id
-    )
-    SELECT COUNT(*) INTO v_recalled_count FROM recalled;
+    IF v_target_folder IS NOT NULL THEN
+      WITH recalled AS (
+        UPDATE public.leads
+        SET assigned_to = NULL,
+            status = 'New',
+            assigned_at = NULL
+        WHERE company_id = p_company_id
+          AND assigned_to IS NOT NULL
+          AND status = 'Assigned'
+          AND last_call_at IS NULL
+          AND folder_date::text LIKE (v_target_folder || '%')
+        RETURNING id
+      )
+      SELECT COUNT(*) INTO v_recalled_count FROM recalled;
+    ELSE
+      WITH recalled AS (
+        UPDATE public.leads
+        SET assigned_to = NULL,
+            status = 'New',
+            assigned_at = NULL
+        WHERE company_id = p_company_id
+          AND assigned_to IS NOT NULL
+          AND status = 'Assigned'
+          AND last_call_at IS NULL
+        RETURNING id
+      )
+      SELECT COUNT(*) INTO v_recalled_count FROM recalled;
+    END IF;
 
     UPDATE public.lead_batches
-    SET status = 'COMPLETED', completed_at = now()
+    SET status = 'COMPLETED', completed_at = clock_timestamp()
     WHERE company_id = p_company_id
       AND status = 'IN_PROGRESS';
   END IF;
@@ -1144,8 +1192,75 @@ BEGIN
   RETURN jsonb_build_object(
     'success', true,
     'status', 'STOPPED',
+    'folder', v_target_folder,
     'recalled_count', v_recalled_count,
     'message', 'Auto-assign stopped' || CASE WHEN v_recalled_count > 0 THEN '. ' || v_recalled_count || ' uncontacted leads returned to unassigned pool.' ELSE '.' END
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_auto_assign_folder(
+  p_company_id uuid,
+  p_folder_date text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_status text;
+  v_batch_size integer := 100;
+  v_target_folder text := NULL;
+  v_refilled_agents integer := 0;
+  v_total_assigned integer := 0;
+  v_agent record;
+  v_pending integer;
+  v_alloc_res jsonb;
+BEGIN
+  IF p_folder_date IS NOT NULL AND p_folder_date != '' AND p_folder_date != 'all' THEN
+    v_target_folder := p_folder_date;
+  END IF;
+
+  UPDATE public.companies
+  SET active_auto_assign_folder = v_target_folder
+  WHERE id = p_company_id
+  RETURNING COALESCE(auto_assign_status, 'STOPPED'), COALESCE(agent_lead_batch_size, 100)
+  INTO v_status, v_batch_size;
+
+  IF v_status = 'RUNNING' THEN
+    FOR v_agent IN
+      SELECT p.id, p.full_name
+      FROM public.profiles p
+      JOIN public.user_roles ur ON ur.user_id = p.id
+      WHERE p.company_id = p_company_id
+        AND p.is_active = true
+        AND ur.role = 'agent'
+      ORDER BY p.full_name ASC
+    LOOP
+      SELECT COUNT(*) INTO v_pending
+      FROM public.leads
+      WHERE company_id = p_company_id
+        AND assigned_to = v_agent.id
+        AND status IN ('New', 'Assigned');
+
+      IF v_pending = 0 THEN
+        v_alloc_res := public.allocate_lead_batch(p_company_id, v_agent.id, v_batch_size, 'FOLDER_SWITCH_DISPATCH', false, v_target_folder);
+        IF (v_alloc_res->>'assigned_count')::integer > 0 THEN
+          v_refilled_agents := v_refilled_agents + 1;
+          v_total_assigned := v_total_assigned + (v_alloc_res->>'assigned_count')::integer;
+        END IF;
+      END IF;
+    END LOOP;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'folder', v_target_folder,
+    'status', v_status,
+    'agents_refilled', v_refilled_agents,
+    'total_assigned', v_total_assigned,
+    'message', 'Auto-assign target set to ' || COALESCE('folder ' || v_target_folder, 'all folders') || CASE WHEN v_total_assigned > 0 THEN ' (' || v_total_assigned || ' leads assigned immediately).' ELSE '.' END
   );
 END;
 $$;

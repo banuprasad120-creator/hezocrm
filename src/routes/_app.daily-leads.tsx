@@ -2,8 +2,8 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, AlertCircle, Clock, Download, FileSpreadsheet, Flame, FolderPlus, History, Inbox, Layers, Loader2,
-  PhoneCall, Plus, PlusCircle, Shuffle, Trash2, Upload, UserCheck, UserPlus, Users2, Zap
+  Activity, AlertCircle, AlertTriangle, CheckCircle2, Clock, Download, FileSpreadsheet, Flame, FolderPlus, History, Inbox, Layers, Loader2,
+  Pause, PhoneCall, Play, Plus, PlusCircle, Shuffle, Sparkles, Square, Trash2, Upload, UserCheck, UserPlus, Users2, Zap
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -22,7 +22,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LOAN_TYPES, inr, todayISO, priorityTone, type Lead, type LeadPriority } from "@/lib/crm";
 import { bulkPermanentDeleteLeadsServerFn, deleteFolderServerFn, permanentDeleteLeadServerFn, updateLeadPriorityServerFn } from "@/lib/crm.functions";
-import { getCompanyBatchSettings, distributeLeadsEqually } from "@/lib/lead-batch";
+import {
+  getCompanyBatchSettings,
+  distributeLeadsEqually,
+  startAutoAssignment,
+  pauseAutoAssignment,
+  stopAutoAssignment,
+  setActiveAutoAssignFolder,
+} from "@/lib/lead-batch";
 import { exportToExcel, exportToCsv } from "@/lib/export-utils";
 
 
@@ -202,17 +209,96 @@ function DailyLeads() {
   const { data: companyRecord } = useQuery({
     queryKey: ["company-auto-assign-status", companyId],
     enabled: Boolean(companyId),
-    refetchInterval: 5000,
+    refetchInterval: 3000,
     queryFn: async () => {
       const { data } = await supabase
         .from("companies")
-        .select("auto_assign_status, agent_lead_batch_size")
+        .select("auto_assign_status, agent_lead_batch_size, active_auto_assign_folder")
         .eq("id", companyId!)
         .maybeSingle();
       return data;
     },
   });
   const autoAssignStatus = companyRecord?.auto_assign_status || "RUNNING";
+  const activeAutoAssignFolder = (companyRecord as any)?.active_auto_assign_folder || null;
+
+  const [queueActionBusy, setQueueActionBusy] = useState(false);
+  const [stopQueueDialogOpen, setStopQueueDialogOpen] = useState(false);
+  const [recallOnStop, setRecallOnStop] = useState(true);
+
+  const handleQueueStart = async (targetFolder?: string) => {
+    if (!companyId) return;
+    setQueueActionBusy(true);
+    try {
+      const f = targetFolder !== undefined ? targetFolder : (activeAutoAssignFolder || folderDate);
+      const res = await startAutoAssignment(companyId, f);
+      toast.success(res.message || `⚡ Auto-assign started for folder ${f}!`);
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
+      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+      qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+    } catch (err) {
+      toast.error("Failed to start auto-assign", { description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setQueueActionBusy(false);
+    }
+  };
+
+  const handleQueuePause = async () => {
+    if (!companyId) return;
+    setQueueActionBusy(true);
+    try {
+      const res = await pauseAutoAssignment(companyId);
+      toast.info(res.message || "⏸️ Auto-assign paused.");
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
+      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+    } catch (err) {
+      toast.error("Failed to pause auto-assign", { description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setQueueActionBusy(false);
+    }
+  };
+
+  const handleQueueStop = async () => {
+    if (!companyId) return;
+    setQueueActionBusy(true);
+    try {
+      const res = await stopAutoAssignment(companyId, recallOnStop, activeAutoAssignFolder || folderDate);
+      toast.warning(res.message || "⏹️ Auto-assign stopped.");
+      setStopQueueDialogOpen(false);
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
+      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+      qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["active-batch"] });
+      qc.invalidateQueries({ queryKey: ["unassigned-leads-count"] });
+    } catch (err) {
+      toast.error("Failed to stop auto-assign", { description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setQueueActionBusy(false);
+    }
+  };
+
+  const handleSelectAutoAssignFolder = async (selectedTarget: string) => {
+    if (!companyId) return;
+    setQueueActionBusy(true);
+    try {
+      const res = await setActiveAutoAssignFolder(companyId, selectedTarget === "all" ? null : selectedTarget);
+      toast.success(res.message || `Auto-assign target folder set to ${selectedTarget}.`);
+      qc.invalidateQueries({ queryKey: ["company-auto-assign-status"] });
+      qc.invalidateQueries({ queryKey: ["batch-settings"] });
+      qc.invalidateQueries({ queryKey: ["daily-leads"] });
+      qc.invalidateQueries({ queryKey: ["daily-lead-stats"] });
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+    } catch (err) {
+      toast.error("Failed to update auto-assign folder", { description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setQueueActionBusy(false);
+    }
+  };
 
   // Counts come from head-only count queries so folders with 10,000+ leads stay instant.
   const { data: folderStats = { total: 0, assigned: 0, unassigned: 0, called: 0, pending: 0, highWaiting: 0, medWaiting: 0, lowWaiting: 0 } } = useQuery({
@@ -440,6 +526,7 @@ function DailyLeads() {
             {companyId && (
               <AutoAssignControls
                 companyId={companyId}
+                folderDate={folderDate}
                 onAddNewData={() => setAddNewDataOpen(true)}
               />
             )}
@@ -546,12 +633,12 @@ function DailyLeads() {
         )}
       </div>
 
-      {/* ── LIVE PRIORITY QUEUE INDICATOR ── */}
+      {/* ── LIVE PRIORITY QUEUE INDICATOR & CONTROLS ── */}
       <div className="mb-4 rounded-2xl border bg-gradient-to-r from-card via-card to-primary/5 p-4 card-elevated">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
-          <div className="flex items-center gap-2.5">
-            <div className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <Activity className="h-4 w-4 animate-pulse" />
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3.5">
+          <div className="flex items-center gap-3">
+            <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Activity className="h-5 w-5 animate-pulse" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -561,43 +648,157 @@ function DailyLeads() {
                     ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
                     : autoAssignStatus === "PAUSED"
                     ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
-                    : "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30"
+                    : "bg-destructive/10 text-destructive border-destructive/30"
                 }`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${
-                    autoAssignStatus === "RUNNING" ? "bg-emerald-500 animate-ping" : autoAssignStatus === "PAUSED" ? "bg-amber-500" : "bg-slate-400"
+                    autoAssignStatus === "RUNNING" ? "bg-emerald-500 animate-ping" : autoAssignStatus === "PAUSED" ? "bg-amber-500" : "bg-destructive"
                   }`} />
-                  {autoAssignStatus === "RUNNING" ? "Live Auto-Assign Running" : autoAssignStatus === "PAUSED" ? "Auto-Assign Paused" : "Auto-Assign Stopped"}
+                  {autoAssignStatus === "RUNNING"
+                    ? `Live Auto-Assign Running (${activeAutoAssignFolder ? `Folder ${activeAutoAssignFolder.split("-").reverse().join("-")}` : "All Folders"})`
+                    : autoAssignStatus === "PAUSED"
+                    ? "Auto-Assign Paused"
+                    : "Auto-Assign Stopped"}
                 </span>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-[11px] text-muted-foreground mt-0.5">
                 {autoAssignStatus === "RUNNING"
-                  ? "New leads are auto-prioritized (HIGH first) and dispatched to active agents without interrupting ongoing calls."
+                  ? `Active target: ${activeAutoAssignFolder ? `Folder ${activeAutoAssignFolder.split("-").reverse().join("-")}` : "All Folders"}. Dispatched to available active agents strictly by priority (HIGH first).`
                   : autoAssignStatus === "PAUSED"
-                  ? "Queue paused. New uploads are safely saved with priority without auto-assigning."
-                  : "Queue stopped. Click Start in controls above to resume automatic distribution."}
+                  ? "Automatic queue allocation is frozen. Leads remain safely stored in the folder."
+                  : "Automatic lead allocation is stopped. Select a folder and click Start to begin auto-assigning."}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Action controls right in this Live Auto-Assign section */}
+          <div className="flex flex-wrap items-center gap-2">
+            {autoAssignStatus === "RUNNING" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="font-bold gap-1.5 h-8 px-3 shadow-xs"
+                  onClick={() => setStopQueueDialogOpen(true)}
+                  disabled={queueActionBusy}
+                  title="Stop auto-assigning leads to agents"
+                >
+                  <Square className="h-3.5 w-3.5" />
+                  <span>Stop Auto-Assign</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2.5 text-xs font-semibold gap-1 text-amber-600 border-amber-500/40 hover:bg-amber-500/10"
+                  onClick={handleQueuePause}
+                  disabled={queueActionBusy}
+                  title="Pause auto-assignment"
+                >
+                  <Pause className="h-3.5 w-3.5" />
+                  <span>Pause</span>
+                </Button>
+              </>
+            ) : autoAssignStatus === "PAUSED" ? (
+              <>
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-8 px-3 text-xs gap-1.5 shadow-xs"
+                  onClick={() => handleQueueStart(folderDate)}
+                  disabled={queueActionBusy}
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  <span>Resume Auto-Assign</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="font-bold gap-1.5 h-8 px-2.5 text-xs"
+                  onClick={() => setStopQueueDialogOpen(true)}
+                  disabled={queueActionBusy}
+                >
+                  <Square className="h-3.5 w-3.5" />
+                  <span>Stop</span>
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-8 px-3 text-xs gap-1.5 shadow-xs"
+                onClick={() => handleQueueStart(folderDate)}
+                disabled={queueActionBusy}
+                title={`Start auto-assigning leads from folder ${folderDate}`}
+              >
+                <Play className="h-3.5 w-3.5" />
+                <span>Start Auto-Assign</span>
+              </Button>
+            )}
+
             <Button
               size="sm"
-              className="gradient-brand text-white font-bold shadow-xs gap-1.5"
+              className="gradient-brand text-white font-bold shadow-xs gap-1.5 h-8"
               onClick={() => setAddNewDataOpen(true)}
             >
               <PlusCircle className="h-3.5 w-3.5" />
-              <span>Add New Data</span>
+              <span>+ Add New Data</span>
             </Button>
             <Button
               size="sm"
               variant="outline"
-              className="text-xs font-semibold"
+              className="text-xs font-semibold h-8"
               onClick={() => setImportOpen(true)}
               title="Direct spreadsheet import wizard"
             >
               <Upload className="mr-1 h-3.5 w-3.5" />
               <span className="hidden sm:inline">Upload File</span>
             </Button>
+          </div>
+        </div>
+
+        {/* ── FOLDER SELECTOR FOR AUTO-ASSIGN ── */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5 rounded-xl border bg-muted/20 px-3.5 py-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-bold text-foreground flex items-center gap-1.5">
+              <Layers className="h-3.5 w-3.5 text-primary" />
+              Auto-Assign From Folder:
+            </span>
+            <Select
+              value={activeAutoAssignFolder || "all"}
+              onValueChange={(val) => handleSelectAutoAssignFolder(val)}
+              disabled={queueActionBusy}
+            >
+              <SelectTrigger className="h-8 w-[230px] text-xs font-bold bg-background">
+                <SelectValue placeholder="Select folder to auto-assign..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">
+                  🌐 All Folders (Total CRM Pool)
+                </SelectItem>
+                {folders.map((f) => (
+                  <SelectItem key={f.date} value={f.date}>
+                    📁 {f.date.split("-").reverse().join("-")} · {f.count.toLocaleString("en-IN")} leads
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {activeAutoAssignFolder === folderDate ? (
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Currently auto-assigning from this folder ({folderDate.split("-").reverse().join("-")})
+              </span>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs font-bold border-primary/40 text-primary hover:bg-primary/10 gap-1.5"
+                onClick={() => handleSelectAutoAssignFolder(folderDate)}
+                disabled={queueActionBusy}
+                title={`Set folder ${folderDate} as the active auto-assignment source`}
+              >
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                <span>Auto-Assign from This Folder ({folderDate.split("-").reverse().join("-")})</span>
+              </Button>
+            )}
           </div>
         </div>
 
@@ -609,14 +810,24 @@ function DailyLeads() {
               <div>
                 <span className="font-bold">Auto-Assignment is Stopped:</span>{" "}
                 <span className="text-muted-foreground">
-                  Agents will not receive any leads. You can use <strong>Add New Data</strong> to safely queue leads by priority.
+                  Agents will not receive any leads. You can select any folder above or use <strong>Add New Data</strong> to safely queue leads by priority.
                 </span>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button
                 size="sm"
-                className="gradient-brand text-white font-bold h-7 px-3 text-xs gap-1 shadow-2xs"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-7 px-3 text-xs gap-1 shadow-2xs"
+                onClick={() => handleQueueStart(folderDate)}
+                disabled={queueActionBusy}
+              >
+                <Play className="h-3.5 w-3.5" />
+                <span>Start Auto-Assign Now</span>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="font-bold h-7 px-3 text-xs gap-1"
                 onClick={() => setAddNewDataOpen(true)}
               >
                 <PlusCircle className="h-3.5 w-3.5" />
@@ -625,6 +836,67 @@ function DailyLeads() {
             </div>
           </div>
         )}
+
+        {/* Stop Confirmation Dialog for Live Queue Section */}
+        <Dialog open={stopQueueDialogOpen} onOpenChange={setStopQueueDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <div className="flex items-center gap-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                <DialogTitle>Stop Lead Auto-Assignment?</DialogTitle>
+              </div>
+              <DialogDescription className="text-sm pt-2">
+                This will completely halt automatic lead distribution for active agents from {activeAutoAssignFolder ? `folder ${activeAutoAssignFolder.split("-").reverse().join("-")}` : "all folders"}.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="rounded-xl border bg-muted/30 p-4 space-y-3 mt-2">
+              <div className="flex items-start space-x-3">
+                <Checkbox
+                  id="recall-uncontacted-queue"
+                  checked={recallOnStop}
+                  onCheckedChange={(c) => setRecallOnStop(Boolean(c))}
+                />
+                <div className="space-y-1">
+                  <Label
+                    htmlFor="recall-uncontacted-queue"
+                    className="text-xs font-bold leading-none cursor-pointer"
+                  >
+                    Recall uncontacted leads back to the unassigned queue
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    Leads assigned to agents that haven&apos;t been dialed yet will be released back to the unassigned pool.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-4 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setStopQueueDialogOpen(false)}
+                disabled={queueActionBusy}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleQueueStop}
+                disabled={queueActionBusy}
+                className="gap-1.5"
+              >
+                {queueActionBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Square className="h-3.5 w-3.5" />
+                )}
+                Stop Auto-Assignment
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Live Priority Breakdown Grid */}
         <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
