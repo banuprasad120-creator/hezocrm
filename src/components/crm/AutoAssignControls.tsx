@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pause, Play, Square, AlertTriangle, Sparkles } from "lucide-react";
+import { Loader2, Pause, Play, Square, AlertTriangle, Sparkles, PlusCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,9 +24,10 @@ import {
 interface AutoAssignControlsProps {
   companyId: string;
   variant?: "toolbar" | "card";
+  onAddNewData?: () => void;
 }
 
-export function AutoAssignControls({ companyId, variant = "toolbar" }: AutoAssignControlsProps) {
+export function AutoAssignControls({ companyId, variant = "toolbar", onAddNewData }: AutoAssignControlsProps) {
   const qc = useQueryClient();
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
@@ -197,6 +198,23 @@ export function AutoAssignControls({ companyId, variant = "toolbar" }: AutoAssig
             )}
             <span>Stop</span>
           </Button>
+
+          {/* Feature: Add New Data prominently available after stopping */}
+          {status === "STOPPED" && onAddNewData && (
+            <>
+              <div className="h-4 w-px bg-border my-auto" />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onAddNewData}
+                className="h-7 px-2.5 text-xs font-bold gap-1 border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
+                title="Add new data while auto-assignment is stopped"
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                <span>+ Add New Data</span>
+              </Button>
+            </>
+          )}
         </div>
 
         {/* Stop Confirmation Dialog */}
@@ -230,6 +248,13 @@ export function AutoAssignControls({ companyId, variant = "toolbar" }: AutoAssig
                     Leads assigned to agents that have never been dialed will be released back to the unassigned pool so other workflows can use them.
                   </p>
                 </div>
+              </div>
+
+              <div className="rounded-lg bg-primary/5 border border-primary/20 p-2.5 text-[11px] text-muted-foreground flex items-center gap-2">
+                <PlusCircle className="h-4 w-4 text-primary shrink-0" />
+                <span>
+                  <strong>Feature Note:</strong> After stopping, you can click <strong>&quot;Add New Data&quot;</strong> anytime to upload spreadsheets or enter leads. They will be safely queued without reaching agents until you resume.
+                </span>
               </div>
             </div>
 
@@ -354,6 +379,26 @@ export function AutoAssignControls({ companyId, variant = "toolbar" }: AutoAssig
             Stop
           </Button>
         </div>
+
+        {status === "STOPPED" && onAddNewData && (
+          <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <PlusCircle className="h-4 w-4 text-primary" />
+              <div>
+                <p className="text-xs font-bold text-foreground">Add New Data While Stopped</p>
+                <p className="text-[11px] text-muted-foreground">Upload spreadsheets or add leads. They will wait safely in queue until resumed.</p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={onAddNewData}
+              className="gradient-brand text-white font-bold h-7 px-3 text-xs gap-1 shadow-2xs shrink-0"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              <span>Add New Data</span>
+            </Button>
+          </div>
+        )}
       </div>
 
       <Dialog open={stopDialogOpen} onOpenChange={setStopDialogOpen}>

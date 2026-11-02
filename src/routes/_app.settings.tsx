@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -37,6 +37,7 @@ function Row({ label, hint, control }: { label: string; hint?: string; control: 
 }
 
 function SettingsPage() {
+  const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const { data: session } = useCrmSession();
   const companyId = session?.companyId ?? null;
@@ -162,7 +163,13 @@ function SettingsPage() {
               </p>
             </div>
 
-            {companyId && <AutoAssignControls companyId={companyId} variant="card" />}
+            {companyId && (
+              <AutoAssignControls
+                companyId={companyId}
+                variant="card"
+                onAddNewData={() => navigate({ to: "/daily-leads" })}
+              />
+            )}
 
             <Row
               label="Agent Lead Batch Size"

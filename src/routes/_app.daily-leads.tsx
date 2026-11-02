@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, AlertCircle, Clock, Download, FileSpreadsheet, Flame, FolderPlus, History, Inbox, Layers, Loader2,
-  PhoneCall, Plus, Shuffle, Trash2, Upload, UserCheck, UserPlus, Users2, Zap
+  PhoneCall, Plus, PlusCircle, Shuffle, Trash2, Upload, UserCheck, UserPlus, Users2, Zap
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
 import { ImportLeadsWizard } from "@/components/crm/ImportLeadsWizard";
 import { CreateLeadDialog } from "@/components/crm/CreateLeadDialog";
+import { AddNewDataDialog } from "@/components/crm/AddNewDataDialog";
 import { AutoAssignControls } from "@/components/crm/AutoAssignControls";
 import { supabase } from "@/integrations/supabase/client";
 import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
@@ -65,6 +66,7 @@ function DailyLeads() {
   const [busy, setBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [createLeadOpen, setCreateLeadOpen] = useState(false);
+  const [addNewDataOpen, setAddNewDataOpen] = useState(false);
   const [unassignedOnly, setUnassignedOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [deleteFolderDialogOpen, setDeleteFolderDialogOpen] = useState(false);
@@ -435,7 +437,12 @@ function DailyLeads() {
         description={`📁 Folder ${folderDate} · ${folderStats.total.toLocaleString("en-IN")} leads · ${folderStats.assigned.toLocaleString("en-IN")} assigned`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {companyId && <AutoAssignControls companyId={companyId} />}
+            {companyId && (
+              <AutoAssignControls
+                companyId={companyId}
+                onAddNewData={() => setAddNewDataOpen(true)}
+              />
+            )}
             <Input
               type="date"
               value={folderDate}
@@ -464,14 +471,15 @@ function DailyLeads() {
             </Button>
             <Button
               size="sm"
-              className="gradient-brand text-white font-bold gap-1 shadow-xs h-9"
-              onClick={() => setCreateLeadOpen(true)}
+              className="gradient-brand text-white font-bold gap-1.5 shadow-xs h-9"
+              onClick={() => setAddNewDataOpen(true)}
+              title="Add new data: upload Excel/CSV or add single leads to queue"
             >
-              <UserPlus className="h-4 w-4" />
-              <span>+ Add Lead</span>
+              <PlusCircle className="h-4 w-4" />
+              <span>+ Add New Data</span>
             </Button>
             <Button size="sm" variant="outline" className="h-9" onClick={() => setImportOpen(true)}>
-              <Upload className="mr-1 h-4 w-4" /> Import Leads
+              <Upload className="mr-1 h-4 w-4" /> Import Excel/CSV
             </Button>
             <Button
               size="sm"
@@ -484,6 +492,18 @@ function DailyLeads() {
             </Button>
           </div>
         }
+      />
+
+      <AddNewDataDialog
+        open={addNewDataOpen}
+        onOpenChange={setAddNewDataOpen}
+        companyId={companyId}
+        adminUserId={session?.userId ?? null}
+        defaultFolderDate={folderDate}
+        onOpenImportWizard={() => setImportOpen(true)}
+        onSuccess={() => {
+          qc.invalidateQueries();
+        }}
       />
 
       <ImportLeadsWizard
@@ -562,14 +582,49 @@ function DailyLeads() {
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              className="gradient-brand text-white shadow-xs"
-              onClick={() => setImportOpen(true)}
+              className="gradient-brand text-white font-bold shadow-xs gap-1.5"
+              onClick={() => setAddNewDataOpen(true)}
             >
-              <Upload className="mr-1.5 h-3.5 w-3.5" />
-              Upload More Leads
+              <PlusCircle className="h-3.5 w-3.5" />
+              <span>Add New Data</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs font-semibold"
+              onClick={() => setImportOpen(true)}
+              title="Direct spreadsheet import wizard"
+            >
+              <Upload className="mr-1 h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Upload File</span>
             </Button>
           </div>
         </div>
+
+        {/* Stopped State Notification & Action Callout */}
+        {autoAssignStatus === "STOPPED" && (
+          <div className="mt-3 rounded-xl border border-destructive/25 bg-destructive/5 p-3 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+            <div className="flex items-center gap-2.5 text-foreground">
+              <span className="text-base">⏹️</span>
+              <div>
+                <span className="font-bold">Auto-Assignment is Stopped:</span>{" "}
+                <span className="text-muted-foreground">
+                  Agents will not receive any leads. You can use <strong>Add New Data</strong> to safely queue leads by priority.
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                size="sm"
+                className="gradient-brand text-white font-bold h-7 px-3 text-xs gap-1 shadow-2xs"
+                onClick={() => setAddNewDataOpen(true)}
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                <span>+ Add New Data</span>
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Live Priority Breakdown Grid */}
         <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">

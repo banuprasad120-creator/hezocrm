@@ -326,7 +326,12 @@ function Monitoring() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {companyId && <AutoAssignControls companyId={companyId} />}
+            {companyId && (
+              <AutoAssignControls
+                companyId={companyId}
+                onAddNewData={() => setImportOpen(true)}
+              />
+            )}
             <Button
               variant="outline"
               size="sm"
