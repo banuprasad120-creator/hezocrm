@@ -1988,6 +1988,8 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.admin_mark_attendance(uuid, uuid, date, text, text, text) TO authenticated, service_role;
 
+DROP FUNCTION IF EXISTS public.get_team_monthly_attendance_summary(uuid, integer, integer);
+
 CREATE OR REPLACE FUNCTION public.get_team_monthly_attendance_summary(
   p_company_id uuid,
   p_year integer,
@@ -1997,9 +1999,11 @@ RETURNS TABLE (
   employee_id uuid,
   full_name text,
   email text,
+  total_working_days bigint,
   total_days_present bigint,
   total_days_late bigint,
   total_days_absent bigint,
+  total_days_leave bigint,
   total_worked_seconds bigint,
   total_break_seconds bigint,
   days_in_month integer
@@ -2022,40 +2026,61 @@ AS $$
       AND p.is_active = true
       AND ur.role = 'agent'
   ),
-  att AS (
-    SELECT 
-      a.employee_id,
-      COUNT(*) FILTER (WHERE a.status = 'Present' OR a.status = 'Late') AS present_count,
-      COUNT(*) FILTER (WHERE a.status = 'Late') AS late_count,
-      COUNT(*) FILTER (WHERE a.status = 'Absent') AS absent_count,
-      COALESCE(SUM(
-        CASE 
-          WHEN a.clock_in IS NOT NULL AND a.clock_out IS NOT NULL THEN
-            GREATEST(0, EXTRACT(EPOCH FROM (a.clock_out - a.clock_in))::bigint - a.break_seconds)
-          ELSE 0
-        END
-      ), 0) AS worked_sec,
-      COALESCE(SUM(a.break_seconds), 0)::bigint AS break_sec
+  working_days AS (
+    SELECT DISTINCT a.work_date AS day
     FROM public.attendance a
     CROSS JOIN month_range mr
     WHERE a.company_id = p_company_id
       AND a.work_date >= mr.start_date
       AND a.work_date <= mr.end_date
-    GROUP BY a.employee_id
+    UNION
+    SELECT CURRENT_DATE AS day
+    FROM month_range mr
+    WHERE CURRENT_DATE >= mr.start_date
+      AND CURRENT_DATE <= mr.end_date
+      AND EXTRACT(ISODOW FROM CURRENT_DATE) != 7
+  ),
+  total_wd AS (
+    SELECT COUNT(*)::bigint AS cnt FROM working_days
+  ),
+  agent_days AS (
+    SELECT 
+      ag.id AS employee_id,
+      ag.full_name,
+      ag.email,
+      wd.day AS work_date,
+      COALESCE(a.status::text, 'Absent') AS effective_status,
+      a.clock_in,
+      a.clock_out,
+      COALESCE(a.break_seconds, 0) AS break_seconds
+    FROM agents ag
+    CROSS JOIN working_days wd
+    LEFT JOIN public.attendance a 
+      ON a.employee_id = ag.id 
+     AND a.work_date = wd.day 
+     AND a.company_id = p_company_id
   )
   SELECT 
     ag.id AS employee_id,
     ag.full_name,
     ag.email,
-    COALESCE(att.present_count, 0)::bigint AS total_days_present,
-    COALESCE(att.late_count, 0)::bigint AS total_days_late,
-    COALESCE(att.absent_count, 0)::bigint AS total_days_absent,
-    COALESCE(att.worked_sec, 0)::bigint AS total_worked_seconds,
-    COALESCE(att.break_sec, 0)::bigint AS total_break_seconds,
-    EXTRACT(DAY FROM (mr.end_date))::integer AS days_in_month
+    (SELECT cnt FROM total_wd) AS total_working_days,
+    COUNT(ad.effective_status) FILTER (WHERE ad.effective_status IN ('Present', 'Late', 'Half Day'))::bigint AS total_days_present,
+    COUNT(ad.effective_status) FILTER (WHERE ad.effective_status = 'Late')::bigint AS total_days_late,
+    COUNT(ad.effective_status) FILTER (WHERE ad.effective_status = 'Absent')::bigint AS total_days_absent,
+    COUNT(ad.effective_status) FILTER (WHERE ad.effective_status = 'Leave')::bigint AS total_days_leave,
+    COALESCE(SUM(
+      CASE 
+        WHEN ad.clock_in IS NOT NULL AND ad.clock_out IS NOT NULL THEN
+          GREATEST(0, EXTRACT(EPOCH FROM (ad.clock_out - ad.clock_in))::bigint - ad.break_seconds)
+        ELSE 0
+      END
+    ), 0)::bigint AS total_worked_seconds,
+    COALESCE(SUM(ad.break_seconds), 0)::bigint AS total_break_seconds,
+    EXTRACT(DAY FROM (SELECT end_date FROM month_range))::integer AS days_in_month
   FROM agents ag
-  CROSS JOIN month_range mr
-  LEFT JOIN att ON att.employee_id = ag.id
+  LEFT JOIN agent_days ad ON ad.employee_id = ag.id
+  GROUP BY ag.id, ag.full_name, ag.email
   ORDER BY ag.full_name ASC, ag.email ASC;
 $$;
 

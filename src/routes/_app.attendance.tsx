@@ -57,9 +57,11 @@ interface MonthlySummaryRow {
   employee_id: string;
   full_name: string;
   email: string;
+  total_working_days?: number;
   total_days_present: number;
   total_days_late: number;
   total_days_absent: number;
+  total_days_leave?: number;
   total_worked_seconds: number;
   total_break_seconds: number;
   days_in_month: number;
@@ -382,20 +384,64 @@ function AttendancePage() {
   const live = Boolean(today?.clock_in) && !today?.clock_out;
 
   // Personal Month Stats
-  const presentDays = month.filter((m) => m.status === "Present" || m.status === "Late").length;
-  const lateDays = month.filter((m) => m.status === "Late").length;
-  const absentDays = month.filter((m) => m.status === "Absent").length;
-  const avgHours = month.length
-    ? month.reduce((s, m) => s + workedSeconds(m, now), 0) / month.length / 3600
-    : 0;
-
   const daysInMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
-  const byDay = new Map(month.map((m) => [Number(m.work_date.slice(8, 10)), m]));
+  const byDay = useMemo(() => new Map(month.map((m) => [Number(m.work_date.slice(8, 10)), m])), [month]);
   const firstWeekday = (new Date(selectedYear, selectedMonth, 1).getDay() + 6) % 7;
 
+  const presentDays = month.filter((m) => m.status === "Present" || m.status === "Late" || m.status === "Half Day").length;
+  const lateDays = month.filter((m) => m.status === "Late").length;
+  const absentDays = useMemo(() => {
+    let abs = 0;
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const isCurrentMonth = todayDate.getFullYear() === selectedYear && todayDate.getMonth() === selectedMonth;
+    const maxDay = isCurrentMonth ? todayDate.getDate() : daysInMonth;
+
+    for (let d = 1; d <= maxDay; d++) {
+      const dObj = new Date(selectedYear, selectedMonth, d);
+      if (dObj.getDay() === 0) continue; // Skip Sunday
+      const rec = byDay.get(d);
+      if (!rec || rec.status === "Absent") {
+        abs++;
+      }
+    }
+    return abs;
+  }, [byDay, daysInMonth, selectedYear, selectedMonth]);
+
+  const avgHours = month.length
+    ? month.reduce((s, m) => s + workedSeconds(m, now), 0) / (presentDays || 1) / 3600
+    : 0;
+
   // Agent Modal Calendar helpers
-  const agentByDay = new Map(agentMonthlyRecords.map((m) => [Number(m.work_date.slice(8, 10)), m]));
-  const agentPresentCount = agentMonthlyRecords.filter((m) => m.status === "Present" || m.status === "Late").length;
+  const agentByDay = useMemo(() => {
+    return new Map(agentMonthlyRecords.map((m) => [Number(m.work_date.slice(8, 10)), m]));
+  }, [agentMonthlyRecords]);
+
+  const agentPresentCount = useMemo(() => {
+    return agentMonthlyRecords.filter((m) => m.status === "Present" || m.status === "Late" || m.status === "Half Day").length;
+  }, [agentMonthlyRecords]);
+
+  const agentWorkedSec = useMemo(() => {
+    return agentMonthlyRecords.reduce((s, m) => s + workedSeconds(m, now), 0);
+  }, [agentMonthlyRecords, now]);
+
+  const agentAbsentCount = useMemo(() => {
+    let abs = 0;
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const isCurrentMonth = todayDate.getFullYear() === selectedYear && todayDate.getMonth() === selectedMonth;
+    const maxDay = isCurrentMonth ? todayDate.getDate() : daysInMonth;
+
+    for (let d = 1; d <= maxDay; d++) {
+      const dObj = new Date(selectedYear, selectedMonth, d);
+      if (dObj.getDay() === 0) continue; // Skip Sunday
+      const rec = agentByDay.get(d);
+      if (!rec || rec.status === "Absent") {
+        abs++;
+      }
+    }
+    return abs;
+  }, [agentByDay, daysInMonth, selectedYear, selectedMonth]);
 
   const todayLabel = new Date().toLocaleDateString("en-IN", {
     weekday: "short",
@@ -1063,8 +1109,17 @@ function AttendancePage() {
                               </span>
                             </td>
 
-                            <td className="px-4 py-3 font-semibold text-rose-500">
-                              {m.total_days_absent}
+                            <td className="px-4 py-3">
+                              <span
+                                className={cn(
+                                  "font-extrabold px-2 py-0.5 rounded-md inline-block text-xs",
+                                  Number(m.total_days_absent) > 0
+                                    ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30"
+                                    : "text-muted-foreground"
+                                )}
+                              >
+                                {m.total_days_absent} {Number(m.total_days_absent) === 1 ? "day" : "days"}
+                              </span>
                             </td>
 
                             <td className="px-4 py-3 font-mono font-black text-brand text-sm">
@@ -1263,15 +1318,40 @@ function AttendancePage() {
                 ))}
                 {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
                   const row = byDay.get(d);
+                  const dayDate = new Date(selectedYear, selectedMonth, d);
+                  dayDate.setHours(0, 0, 0, 0);
+                  const todayMidnight = new Date();
+                  todayMidnight.setHours(0, 0, 0, 0);
+                  const isSunday = dayDate.getDay() === 0;
+                  const isFuture = dayDate > todayMidnight;
+
+                  let cellStyle = "bg-muted/30 text-muted-foreground ring-border";
+                  let label = "";
+
+                  if (row) {
+                    cellStyle = statusColor[row.status] || statusColor["Present"];
+                    label = row.status[0];
+                  } else if (isFuture) {
+                    cellStyle = "bg-muted/10 text-muted-foreground/30 ring-border/20";
+                    label = "";
+                  } else if (isSunday) {
+                    cellStyle = "bg-muted/20 text-muted-foreground/50 ring-border/30";
+                    label = "OFF";
+                  } else {
+                    cellStyle = "bg-rose-500/15 text-rose-500 ring-rose-500/30 font-bold";
+                    label = "A";
+                  }
+
                   return (
                     <div
                       key={d}
-                      className={`aspect-square rounded-xl ring-1 ring-inset p-1 text-left sm:p-1.5 ${
-                        row ? statusColor[row.status] : "bg-muted/30 text-muted-foreground ring-border"
-                      }`}
+                      className={cn(
+                        "aspect-square rounded-xl ring-1 ring-inset p-1 text-left sm:p-1.5 flex flex-col justify-between transition-all",
+                        cellStyle
+                      )}
                     >
                       <p className="text-[10px] font-bold">{d}</p>
-                      <p className="mt-auto text-[9px] font-semibold opacity-80">{row ? row.status[0] : ""}</p>
+                      <p className="mt-auto text-[9px] font-semibold opacity-80">{label}</p>
                     </div>
                   );
                 })}
@@ -1307,9 +1387,15 @@ function AttendancePage() {
                 </Button>
               </div>
 
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-bold text-emerald-600 bg-emerald-500/10 px-2.5 py-1 rounded-md">
-                  {agentPresentCount} Days Present
+                  {agentPresentCount} Present
+                </span>
+                <span className="font-bold text-rose-600 bg-rose-500/10 px-2.5 py-1 rounded-md">
+                  {agentAbsentCount} Absent
+                </span>
+                <span className="font-bold text-brand bg-brand/10 px-2.5 py-1 rounded-md">
+                  {(agentWorkedSec / 3600).toFixed(1)}h Worked
                 </span>
               </div>
             </div>
@@ -1326,23 +1412,46 @@ function AttendancePage() {
               ))}
               {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
                 const row = agentByDay.get(d);
+                const dayDate = new Date(selectedYear, selectedMonth, d);
+                dayDate.setHours(0, 0, 0, 0);
+                const todayMidnight = new Date();
+                todayMidnight.setHours(0, 0, 0, 0);
+                const isSunday = dayDate.getDay() === 0;
+                const isFuture = dayDate > todayMidnight;
+
+                let cellStyle = "bg-muted/20 text-muted-foreground ring-border/50";
+                let label = "";
+
+                if (row) {
+                  cellStyle = statusColor[row.status] || statusColor["Present"];
+                  label = row.status;
+                } else if (isFuture) {
+                  cellStyle = "bg-muted/10 text-muted-foreground/30 ring-border/20";
+                  label = "";
+                } else if (isSunday) {
+                  cellStyle = "bg-muted/20 text-muted-foreground/50 ring-border/30";
+                  label = "OFF";
+                } else {
+                  // Past weekday with no attendance -> Absent
+                  cellStyle = "bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-rose-500/30 font-bold";
+                  label = "ABSENT";
+                }
+
                 return (
                   <div
                     key={`modal-day-${d}`}
                     className={cn(
                       "aspect-square rounded-xl ring-1 ring-inset p-1.5 flex flex-col justify-between text-left transition-all",
-                      row ? statusColor[row.status] : "bg-muted/20 text-muted-foreground ring-border/50"
+                      cellStyle
                     )}
                   >
                     <p className="text-[11px] font-extrabold">{d}</p>
-                    {row ? (
-                      <div>
-                        <p className="text-[9px] font-bold uppercase">{row.status}</p>
-                        {row.clock_in && (
-                          <p className="text-[8px] font-mono opacity-80">{clock(row.clock_in)}</p>
-                        )}
-                      </div>
-                    ) : null}
+                    <div>
+                      {label && <p className="text-[9px] font-bold uppercase tracking-tight">{label}</p>}
+                      {row?.clock_in && (
+                        <p className="text-[8px] font-mono opacity-80">{clock(row.clock_in)}</p>
+                      )}
+                    </div>
                   </div>
                 );
               })}
