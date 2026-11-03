@@ -152,3 +152,4 @@ export async function fetchLeadTakingLogs(params: {
   if (error) throw error;
   return data || { total: 0, logs: [] };
 }
+

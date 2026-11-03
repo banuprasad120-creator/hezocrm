@@ -120,8 +120,8 @@ export function LeadTakingDashboard({ companyId, defaultFolderDate }: LeadTaking
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       return (
-        e.employee_name.toLowerCase().includes(q) ||
-        e.employee_email.toLowerCase().includes(q)
+        (e.employee_name || "").toLowerCase().includes(q) ||
+        (e.employee_email || "").toLowerCase().includes(q)
       );
     });
   }, [employees, searchQuery]);

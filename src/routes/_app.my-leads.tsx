@@ -70,6 +70,11 @@ function MyLeads() {
   const [fetchModalOpen, setFetchModalOpen] = useState(false);
   const [manualCount, setManualCount] = useState<number>(100);
 
+  // Lead Taking & Queue state
+  const [viewTab, setViewTab] = useState<"current" | "queue" | "completed">("current");
+  const [acceptingBatch, setAcceptingBatch] = useState(false);
+  const [queueTakingFilter, setQueueTakingFilter] = useState<string>("all");
+
   /* ── Fetch Available Unassigned Leads in Company ── */
   const { data: unassignedCount = 0 } = useQuery({
     queryKey: ["unassigned-leads-count", companyId],
@@ -168,10 +173,6 @@ function MyLeads() {
   }, [uniqueLeads]);
 
   /* ── Lead Taking Tracking Metrics ── */
-  const [viewTab, setViewTab] = useState<"current" | "queue" | "completed">("current");
-  const [acceptingBatch, setAcceptingBatch] = useState(false);
-  const [queueTakingFilter, setQueueTakingFilter] = useState<string>("all");
-
   const unacceptedLeads = useMemo(
     () => uniqueLeads.filter((l) => (l.taking_status ?? "Assigned") === "Assigned"),
     [uniqueLeads]

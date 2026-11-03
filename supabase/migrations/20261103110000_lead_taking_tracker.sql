@@ -335,3 +335,4 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.get_lead_taking_logs(uuid, uuid, text, text, integer, integer) TO authenticated, service_role;
+

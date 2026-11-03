@@ -82,13 +82,13 @@ export function AppSidebar() {
   const { state, setOpenMobile } = useSidebar();
   const collapsed = state === "collapsed";
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const searchStr = useRouterState({ select: (s) => s.location.searchStr });
+  const href = useRouterState({ select: (s) => s.location.href || "" });
   const isActive = (p: string) => {
     if (p.includes("?")) {
       const [base, query] = p.split("?");
-      return pathname === base && searchStr.includes(query);
+      return pathname === base && href.includes(query);
     }
-    return (pathname === p || pathname.startsWith(p + "/")) && !searchStr.includes("tab=taking");
+    return (pathname === p || pathname.startsWith(p + "/")) && !href.includes("tab=taking");
   };
   const { data: session, isLoading: sessionLoading } = useCrmSession();
   const groups = sessionLoading ? [] : session?.isAdmin ? adminGroups : agentGroups;

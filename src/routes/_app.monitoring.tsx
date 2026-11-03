@@ -82,13 +82,14 @@ function Monitoring() {
   const [importOpen, setImportOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<"calls" | "taking">(() => {
+  const [activeTab, setActiveTab] = useState<"calls" | "taking">("calls");
+
+  useEffect(() => {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search).get("tab");
-      if (p === "taking") return "taking";
+      if (p === "taking") setActiveTab("taking");
     }
-    return "calls";
-  });
+  }, []);
 
   const handleTabChange = (t: "calls" | "taking") => {
     setActiveTab(t);
@@ -430,11 +431,17 @@ function Monitoring() {
         </button>
       </div>
 
-      {activeTab === "taking" && companyId && (
-        <LeadTakingDashboard
-          companyId={companyId}
-          defaultFolderDate={!allDates && date ? date : undefined}
-        />
+      {activeTab === "taking" && (
+        companyId ? (
+          <LeadTakingDashboard
+            companyId={companyId}
+            defaultFolderDate={!allDates && date ? date : undefined}
+          />
+        ) : (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        )
       )}
 
       {activeTab === "calls" && (

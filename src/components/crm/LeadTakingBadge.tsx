@@ -23,3 +23,4 @@ export function LeadTakingBadge({ status, className, showDot = true }: LeadTakin
     </span>
   );
 }
+
