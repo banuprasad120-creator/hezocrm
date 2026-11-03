@@ -15,6 +15,7 @@ import {
   CALL_RESULTS, CUSTOMER_RESPONSES, LEAD_STATUSES, addDaysISO, inr,
   type CallResult, type CustomerResponse, type Lead, type LeadStatus,
 } from "@/lib/crm";
+import { recordLeadTakingAction } from "@/lib/lead-taking";
 
 const RESPONSE_TO_STATUS: Record<CustomerResponse, LeadStatus> = {
   "Interested": "Interested",
@@ -89,10 +90,31 @@ export function CallUpdateDialog({
       });
       if (cErr) throw cErr;
 
+      const isFollowUp = status === "Follow-up";
+      const nextTakingAction = isFollowUp ? "FOLLOW_UP_REQUIRED" : "COMPLETED";
+      const nextTakingStatus = isFollowUp ? "Follow-up Required" : "Completed";
+
       const { error: lErr } = await supabase.from("leads")
-        .update({ status, last_call_at: new Date().toISOString(), notes: notes || lead.notes })
+        .update({
+          status,
+          taking_status: nextTakingStatus,
+          completed_at: !isFollowUp ? new Date().toISOString() : null,
+          last_action_at: new Date().toISOString(),
+          last_call_at: new Date().toISOString(),
+          notes: notes || lead.notes,
+        })
         .eq("id", lead.id);
       if (lErr) throw lErr;
+
+      if (effectiveEmpId) {
+        await recordLeadTakingAction({
+          companyId: lead.company_id,
+          employeeId: effectiveEmpId,
+          leadIds: [lead.id],
+          action: nextTakingAction,
+          notes: notes || `Call outcome: ${result} / ${response || status}`,
+        }).catch((e) => console.warn("Failed to record lead taking action:", e));
+      }
 
       if (status !== "Follow-up") {
         // Auto-resolve any previous pending follow-ups for this lead
@@ -130,6 +152,8 @@ export function CallUpdateDialog({
         qc.invalidateQueries({ queryKey: ["my-leads"] }),
         qc.invalidateQueries({ queryKey: ["daily-leads"] }),
         qc.invalidateQueries({ queryKey: ["call-history", lead.id] }),
+        qc.invalidateQueries({ queryKey: ["lead-taking-summary"] }),
+        qc.invalidateQueries({ queryKey: ["lead-taking-logs"] }),
       ]);
       onOpenChange(false);
     } catch (err) {

@@ -1,15 +1,18 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Building2, CalendarClock, CreditCard, FileCheck, Flame, History, MessageCircle, PhoneCall, ShieldCheck } from "lucide-react";
+import { Building2, CalendarClock, CreditCard, FileCheck, Flame, History, MessageCircle, PhoneCall, ShieldCheck, CheckCircle2, Play, UserCheck } from "lucide-react";
 import { Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
+import { LeadTakingBadge } from "@/components/crm/LeadTakingBadge";
 import { CandidateDocumentsDialog } from "@/components/crm/CandidateDocumentsDialog";
 import { QuickFollowUpDialog } from "@/components/crm/QuickFollowUpDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDateTime, inr, getWhatsAppUrl, type Lead } from "@/lib/crm";
 import { getDocumentStats, parseInterestedData } from "@/lib/interested-lead";
+import { recordLeadTakingAction } from "@/lib/lead-taking";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -86,6 +89,31 @@ export function AgentLeadSheet({
     },
   });
 
+  const [takingLoading, setTakingLoading] = useState(false);
+
+  const handleUpdateTakingStatus = async (action: "ACCEPTED" | "IN_PROGRESS") => {
+    if (!lead || !lead.assigned_to) return;
+    setTakingLoading(true);
+    try {
+      const res = await recordLeadTakingAction({
+        companyId: lead.company_id,
+        employeeId: lead.assigned_to,
+        leadIds: [lead.id],
+        action,
+        notes: action === "ACCEPTED" ? "Lead accepted by employee" : "Employee started working on lead",
+      });
+      if (!res.success) throw new Error(res.message);
+      toast.success(action === "ACCEPTED" ? "Lead accepted successfully!" : "Marked as In Progress");
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["lead-taking-summary"] });
+      qc.invalidateQueries({ queryKey: ["lead-taking-logs"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update lead taking status");
+    } finally {
+      setTakingLoading(false);
+    }
+  };
+
   if (!lead) return null;
   const initials = lead.customer_name.split(" ").map((p) => p[0]).slice(0, 2).join("");
 
@@ -102,7 +130,45 @@ export function AgentLeadSheet({
               <p className="truncate font-mono text-xs text-muted-foreground">{lead.mobile}</p>
             </div>
           </div>
-          <div className="mt-3"><LeadStatusBadge status={lead.status} /></div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <LeadStatusBadge status={lead.status} />
+            <LeadTakingBadge status={lead.taking_status || "Assigned"} />
+          </div>
+
+          {/* Quick Taking Action Banner */}
+          {lead.taking_status === "Assigned" && (
+            <div className="mt-2.5 rounded-xl border border-sky-500/30 bg-sky-500/10 p-2.5 flex items-center justify-between">
+              <div className="text-xs">
+                <span className="font-bold text-sky-500">Assigned — Not Yet Accepted</span>
+                <p className="text-[11px] text-muted-foreground">Accept this lead to take ownership</p>
+              </div>
+              <Button
+                size="sm"
+                disabled={takingLoading}
+                onClick={() => handleUpdateTakingStatus("ACCEPTED")}
+                className="h-7 text-xs font-bold bg-sky-500 hover:bg-sky-600 text-white gap-1 shadow-xs"
+              >
+                <UserCheck className="h-3.5 w-3.5" /> Accept Lead
+              </Button>
+            </div>
+          )}
+
+          {lead.taking_status === "Accepted" && (
+            <div className="mt-2.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-2.5 flex items-center justify-between">
+              <div className="text-xs">
+                <span className="font-bold text-indigo-500">Lead Accepted</span>
+                <p className="text-[11px] text-muted-foreground">Ready to start working</p>
+              </div>
+              <Button
+                size="sm"
+                disabled={takingLoading}
+                onClick={() => handleUpdateTakingStatus("IN_PROGRESS")}
+                className="h-7 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white gap-1 shadow-xs"
+              >
+                <Play className="h-3.5 w-3.5" /> Start Working
+              </Button>
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             <Button asChild className="h-10 flex-1 min-w-[100px] gradient-brand text-white">
               <a href={`tel:${lead.mobile}`}><PhoneCall className="mr-1.5 h-4 w-4" /> CALL</a>
@@ -272,9 +338,19 @@ export function AgentLeadSheet({
             </Section>
           )}
 
-          <Section title="Assignment">
+          <Section title="Assignment & Tracking">
             <Row k="Current status" v={<LeadStatusBadge status={lead.status} />} />
+            <Row k="Taking status" v={<LeadTakingBadge status={lead.taking_status || "Assigned"} />} />
             <Row k="Assigned agent" v={agentName ?? "Unassigned"} />
+            {lead.accepted_at && (
+              <Row k="Accepted at" v={formatDateTime(lead.accepted_at)} />
+            )}
+            {lead.started_working_at && (
+              <Row k="Started working" v={formatDateTime(lead.started_working_at)} />
+            )}
+            {lead.completed_at && (
+              <Row k="Completed at" v={formatDateTime(lead.completed_at)} />
+            )}
             <Row k="Last call" v={lead.last_call_at ? formatDateTime(lead.last_call_at) : "Never"} />
           </Section>
 

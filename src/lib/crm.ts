@@ -76,6 +76,57 @@ export function priorityTone(priority?: string | null): string {
   }
 }
 
+export type LeadTakingStatus =
+  | "Assigned"
+  | "Accepted"
+  | "In Progress"
+  | "Completed"
+  | "Follow-up Required";
+
+export const LEAD_TAKING_STATUSES: LeadTakingStatus[] = [
+  "Assigned",
+  "Accepted",
+  "In Progress",
+  "Completed",
+  "Follow-up Required",
+];
+
+export function takingStatusTone(status?: string | null): { badge: string; dot: string; label: string } {
+  switch (status) {
+    case "Accepted":
+      return {
+        badge: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30",
+        dot: "bg-blue-500",
+        label: "Accepted",
+      };
+    case "In Progress":
+      return {
+        badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30",
+        dot: "bg-amber-500 animate-pulse",
+        label: "In Progress",
+      };
+    case "Completed":
+      return {
+        badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
+        dot: "bg-emerald-500",
+        label: "Completed",
+      };
+    case "Follow-up Required":
+      return {
+        badge: "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30",
+        dot: "bg-purple-500",
+        label: "Follow-up",
+      };
+    case "Assigned":
+    default:
+      return {
+        badge: "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30",
+        dot: "bg-slate-400",
+        label: "Assigned (Waiting)",
+      };
+  }
+}
+
 export function inr(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 }

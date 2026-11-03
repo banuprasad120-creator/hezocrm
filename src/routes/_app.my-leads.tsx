@@ -5,6 +5,7 @@ import {
   CalendarClock, CheckCircle2, Clock, Flame, Loader2, MessageCircle,
   PhoneCall, PhoneForwarded, RefreshCw, Star, WifiOff, Zap, Sparkles,
   Award, ShieldCheck, UserPlus, Plus, BookOpen, Download, FileCheck,
+  UserCheck, Play, ListOrdered,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -12,6 +13,7 @@ import { StatCard } from "@/components/common/StatCard";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { LeadStatusBadge } from "@/components/crm/LeadStatusBadge";
+import { LeadTakingBadge } from "@/components/crm/LeadTakingBadge";
 import { CallUpdateDialog } from "@/components/crm/CallUpdateDialog";
 import { AgentLeadSheet } from "@/components/crm/AgentLeadSheet";
 import { InterestedLeadDialog } from "@/components/crm/InterestedLeadDialog";
@@ -34,6 +36,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, inr, todayISO, getWhatsAppUrl, type Lead } from "@/lib/crm";
+import { recordLeadTakingAction } from "@/lib/lead-taking";
 
 export const Route = createFileRoute("/_app/my-leads")({
   head: () => ({
@@ -164,12 +167,93 @@ function MyLeads() {
     };
   }, [uniqueLeads]);
 
+  /* ── Lead Taking Tracking Metrics ── */
+  const [viewTab, setViewTab] = useState<"current" | "queue" | "completed">("current");
+  const [acceptingBatch, setAcceptingBatch] = useState(false);
+  const [queueTakingFilter, setQueueTakingFilter] = useState<string>("all");
+
+  const unacceptedLeads = useMemo(
+    () => uniqueLeads.filter((l) => (l.taking_status ?? "Assigned") === "Assigned"),
+    [uniqueLeads]
+  );
+  const acceptedLeads = useMemo(
+    () => uniqueLeads.filter((l) => l.taking_status === "Accepted"),
+    [uniqueLeads]
+  );
+  const inProgressLeads = useMemo(
+    () => uniqueLeads.filter((l) => l.taking_status === "In Progress"),
+    [uniqueLeads]
+  );
+  const completedLeads = useMemo(
+    () => uniqueLeads.filter((l) => l.taking_status === "Completed"),
+    [uniqueLeads]
+  );
+  const followUpRequiredLeads = useMemo(
+    () => uniqueLeads.filter((l) => l.taking_status === "Follow-up Required"),
+    [uniqueLeads]
+  );
+
+  const handleAcceptAllLeads = async () => {
+    if (!companyId || !userId || unacceptedLeads.length === 0) return;
+    setAcceptingBatch(true);
+    try {
+      const leadIds = unacceptedLeads.map((l) => l.id);
+      const res = await recordLeadTakingAction({
+        companyId,
+        employeeId: userId,
+        leadIds,
+        action: "ACCEPTED",
+        notes: `Agent accepted batch of ${leadIds.length} assigned leads`,
+      });
+      if (!res.success) throw new Error(res.message);
+      toast.success(`🎉 Accepted ${res.count || leadIds.length} assigned leads!`);
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["lead-taking-summary"] });
+      qc.invalidateQueries({ queryKey: ["lead-taking-logs"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to accept leads");
+    } finally {
+      setAcceptingBatch(false);
+    }
+  };
+
+  const handleSingleLeadTakingAction = async (
+    lead: Lead,
+    action: "ACCEPTED" | "IN_PROGRESS"
+  ) => {
+    if (!companyId || !userId) return;
+    try {
+      const res = await recordLeadTakingAction({
+        companyId,
+        employeeId: userId,
+        leadIds: [lead.id],
+        action,
+        notes: action === "ACCEPTED" ? "Agent accepted lead" : "Agent started working on lead",
+      });
+      if (!res.success) throw new Error(res.message);
+      toast.success(action === "ACCEPTED" ? "Lead accepted!" : "Started working on lead!");
+      qc.invalidateQueries({ queryKey: ["my-leads"] });
+      qc.invalidateQueries({ queryKey: ["lead-taking-summary"] });
+      qc.invalidateQueries({ queryKey: ["lead-taking-logs"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update lead");
+    }
+  };
+
   /* ── Current lead = first uncalled lead ── */
   const pendingLeads = useMemo(
     () => uniqueLeads.filter((l) => !CONTACTED_STATUSES.includes(l.status)),
     [uniqueLeads],
   );
   const currentLead = pendingLeads[0] ?? null;
+
+  const filteredQueueLeads = useMemo(() => {
+    return uniqueLeads.filter((l) => {
+      if (queueTakingFilter === "all") return true;
+      const status = l.taking_status || "Assigned";
+      return status === queueTakingFilter;
+    });
+  }, [uniqueLeads, queueTakingFilter]);
 
   /* ── Batch Progress Calculations ── */
   const activeBatchLeadIds = useMemo(
@@ -492,56 +576,297 @@ function MyLeads() {
 
       {!isLoading && (
         <>
-          {/* ── Current Lead Card (ONE at a time) ── */}
-          {currentLead ? (
-            <div className="mt-6">
-              <div className="mb-3 flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Current Lead — {pendingLeads.length} remaining in batch
-                </p>
+          {/* ── Waiting Acceptance Banner ── */}
+          {unacceptedLeads.length > 0 && (
+            <div className="mt-5 rounded-2xl border border-sky-500/30 bg-sky-500/10 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-500/20 text-sky-500">
+                  <UserCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-foreground">
+                    {unacceptedLeads.length} Assigned Leads Waiting for Acceptance
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    Accept these leads to take responsibility and notify management that work has started.
+                  </p>
+                </div>
               </div>
-              <LeadCard
-                lead={currentLead}
-                followUp={followUpByLead.get(currentLead.id)}
-                isBusy={isBusy}
-                onView={() => setViewLead(currentLead)}
-                onUpdate={() => setActive(currentLead)}
-                onFollowUp={() => setFollowUpLead(currentLead)}
-                onOutOfService={() => outOfServiceM.mutate(currentLead)}
-                onInterested={() => setInterestedLead(currentLead)}
-                onDiary={() => setDiaryLead(currentLead)}
-              />
-            </div>
-          ) : (
-            <div className="mt-6 flex flex-col items-center justify-center rounded-2xl border bg-card p-10 text-center card-elevated space-y-4">
-              <div className="grid h-16 w-16 place-items-center rounded-2xl bg-success/15 text-success">
-                {claiming ? <Loader2 className="h-8 w-8 animate-spin" /> : <CheckCircle2 className="h-8 w-8" />}
-              </div>
-              <div>
-                <p className="text-xl font-extrabold text-foreground">
-                  {claiming ? "Fetching New Batch Automatically… ⚡" : "All Batch Leads Completed! 🎉"}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
-                  {claiming
-                    ? "Pulling the next batch of fresh unassigned leads for you right now."
-                    : "Great job! Click below to pull the next unassigned batch or keep auto-refill enabled."}
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
-                <Button
-                  onClick={() => claimNextBatch()}
-                  disabled={claiming}
-                  className="gradient-brand text-white font-bold h-11 px-6 shadow-md"
-                >
-                  <Zap className="mr-2 h-4 w-4 fill-white" /> Claim Next {batchSize} Leads
-                </Button>
-              </div>
+              <Button
+                size="sm"
+                disabled={acceptingBatch}
+                onClick={handleAcceptAllLeads}
+                className="h-9 px-4 font-bold bg-sky-500 hover:bg-sky-600 text-white shadow-sm shrink-0 gap-1.5"
+              >
+                {acceptingBatch ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Accept All {unacceptedLeads.length} Leads
+              </Button>
             </div>
           )}
 
-          {/* ── Completed / Interested leads summary ── */}
-          {stats.called > 0 && (
+          {/* ── View Switcher: Single Lead Calling vs Full Queue Table ── */}
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant={viewTab === "current" ? "default" : "outline"}
+                onClick={() => setViewTab("current")}
+                className={cn("h-8 text-xs font-bold gap-1.5", viewTab === "current" && "gradient-brand text-white")}
+              >
+                <PhoneCall className="h-3.5 w-3.5" />
+                <span>Single Lead Calling</span>
+                {pendingLeads.length > 0 && (
+                  <span className="rounded-full bg-white/20 px-1.5 py-0.2 text-[10px] font-mono">
+                    {pendingLeads.length}
+                  </span>
+                )}
+              </Button>
+
+              <Button
+                size="sm"
+                variant={viewTab === "queue" ? "default" : "outline"}
+                onClick={() => setViewTab("queue")}
+                className={cn("h-8 text-xs font-bold gap-1.5", viewTab === "queue" && "gradient-brand text-white")}
+              >
+                <ListOrdered className="h-3.5 w-3.5" />
+                <span>Assigned Leads Queue ({uniqueLeads.length})</span>
+                {unacceptedLeads.length > 0 && (
+                  <span className="rounded-full bg-sky-500 text-white px-1.5 py-0.2 text-[10px] font-extrabold animate-pulse">
+                    {unacceptedLeads.length} new
+                  </span>
+                )}
+              </Button>
+
+              {stats.called > 0 && (
+                <Button
+                  size="sm"
+                  variant={viewTab === "completed" ? "default" : "outline"}
+                  onClick={() => setViewTab("completed")}
+                  className={cn("h-8 text-xs font-bold gap-1.5", viewTab === "completed" && "gradient-brand text-white")}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>Completed ({stats.called})</span>
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* ── VIEW TAB 1: Single Lead Calling ── */}
+          {viewTab === "current" && (
+            <>
+              {currentLead ? (
+                <div className="mt-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Current Lead — {pendingLeads.length} remaining in batch
+                    </p>
+                  </div>
+                  <LeadCard
+                    lead={currentLead}
+                    followUp={followUpByLead.get(currentLead.id)}
+                    isBusy={isBusy}
+                    onView={() => {
+                      if (currentLead.taking_status === "Assigned" || currentLead.taking_status === "Accepted") {
+                        handleSingleLeadTakingAction(currentLead, "IN_PROGRESS");
+                      }
+                      setViewLead(currentLead);
+                    }}
+                    onUpdate={() => {
+                      if (currentLead.taking_status === "Assigned" || currentLead.taking_status === "Accepted") {
+                        handleSingleLeadTakingAction(currentLead, "IN_PROGRESS");
+                      }
+                      setActive(currentLead);
+                    }}
+                    onFollowUp={() => setFollowUpLead(currentLead)}
+                    onOutOfService={() => outOfServiceM.mutate(currentLead)}
+                    onInterested={() => setInterestedLead(currentLead)}
+                    onDiary={() => setDiaryLead(currentLead)}
+                    onAccept={() => handleSingleLeadTakingAction(currentLead, "ACCEPTED")}
+                    onStartWorking={() => handleSingleLeadTakingAction(currentLead, "IN_PROGRESS")}
+                  />
+                </div>
+              ) : (
+                <div className="mt-6 flex flex-col items-center justify-center rounded-2xl border bg-card p-10 text-center card-elevated space-y-4">
+                  <div className="grid h-16 w-16 place-items-center rounded-2xl bg-success/15 text-success">
+                    {claiming ? <Loader2 className="h-8 w-8 animate-spin" /> : <CheckCircle2 className="h-8 w-8" />}
+                  </div>
+                  <div>
+                    <p className="text-xl font-extrabold text-foreground">
+                      {claiming ? "Fetching New Batch Automatically… ⚡" : "All Batch Leads Completed! 🎉"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
+                      {claiming
+                        ? "Pulling the next batch of fresh unassigned leads for you right now."
+                        : "Great job! Click below to pull the next unassigned batch or keep auto-refill enabled."}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                    <Button
+                      onClick={() => claimNextBatch()}
+                      disabled={claiming}
+                      className="gradient-brand text-white font-bold h-11 px-6 shadow-md"
+                    >
+                      <Zap className="mr-2 h-4 w-4 fill-white" /> Claim Next {batchSize} Leads
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── VIEW TAB 2: Full Assigned Queue Table ── */}
+          {viewTab === "queue" && (
+            <div className="mt-4 rounded-2xl border bg-card p-4 sm:p-5 card-elevated space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-extrabold text-foreground flex items-center gap-2">
+                    <ListOrdered className="h-5 w-5 text-brand" />
+                    Assigned Leads Queue
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    All leads assigned to you. Accept leads to take ownership, start working, and log outcomes.
+                  </p>
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { id: "all", label: `All (${uniqueLeads.length})` },
+                    { id: "Assigned", label: `Waiting (${unacceptedLeads.length})` },
+                    { id: "Accepted", label: `Accepted (${acceptedLeads.length})` },
+                    { id: "In Progress", label: `Working (${inProgressLeads.length})` },
+                    { id: "Completed", label: `Done (${completedLeads.length})` },
+                    { id: "Follow-up Required", label: `Follow-up (${followUpRequiredLeads.length})` },
+                  ].map((f) => (
+                    <Button
+                      key={f.id}
+                      size="sm"
+                      variant={queueTakingFilter === f.id ? "default" : "outline"}
+                      onClick={() => setQueueTakingFilter(f.id)}
+                      className={cn(
+                        "h-7 text-xs font-semibold",
+                        queueTakingFilter === f.id && "gradient-brand text-white",
+                        f.id === "Assigned" && unacceptedLeads.length > 0 && queueTakingFilter !== "Assigned" && "border-sky-500/40 text-sky-500 font-bold"
+                      )}
+                    >
+                      {f.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Queue Table */}
+              <div className="overflow-x-auto rounded-xl border">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-muted/40 font-bold uppercase tracking-wider text-muted-foreground">
+                    <tr>
+                      <th className="px-3.5 py-2.5">Customer</th>
+                      <th className="px-3.5 py-2.5">Loan / Type</th>
+                      <th className="px-3.5 py-2.5">Folder</th>
+                      <th className="px-3.5 py-2.5">Taking Status</th>
+                      <th className="px-3.5 py-2.5">Call Status</th>
+                      <th className="px-3.5 py-2.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60">
+                    {filteredQueueLeads.map((l) => {
+                      const tStatus = l.taking_status || "Assigned";
+                      return (
+                        <tr key={l.id} className="hover:bg-muted/20 transition-colors">
+                          <td className="px-3.5 py-2.5">
+                            <p className="font-extrabold text-foreground">{l.customer_name}</p>
+                            <p className="font-mono text-muted-foreground">{l.mobile}</p>
+                          </td>
+                          <td className="px-3.5 py-2.5">
+                            <span className="font-semibold">{inr(Number(l.loan_amount))}</span>
+                            <span className="text-muted-foreground block text-[11px]">{l.loan_type}</span>
+                          </td>
+                          <td className="px-3.5 py-2.5 text-muted-foreground font-mono">
+                            {l.folder_date}
+                          </td>
+                          <td className="px-3.5 py-2.5">
+                            <LeadTakingBadge status={tStatus} />
+                          </td>
+                          <td className="px-3.5 py-2.5">
+                            <LeadStatusBadge status={l.status} />
+                          </td>
+                          <td className="px-3.5 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {tStatus === "Assigned" && (
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleSingleLeadTakingAction(l, "ACCEPTED")}
+                                  className="h-7 text-xs font-bold bg-sky-500 hover:bg-sky-600 text-white gap-1 px-2 shadow-xs"
+                                >
+                                  <UserCheck className="h-3 w-3" /> Accept
+                                </Button>
+                              )}
+                              {tStatus === "Accepted" && (
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleSingleLeadTakingAction(l, "IN_PROGRESS")}
+                                  className="h-7 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white gap-1 px-2 shadow-xs"
+                                >
+                                  <Play className="h-3 w-3" /> Start
+                                </Button>
+                              )}
+                              <Button
+                                asChild
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs font-semibold px-2"
+                                onClick={() => {
+                                  if (tStatus === "Assigned" || tStatus === "Accepted") {
+                                    handleSingleLeadTakingAction(l, "IN_PROGRESS");
+                                  }
+                                }}
+                              >
+                                <a href={`tel:${l.mobile}`}>Call</a>
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs px-2"
+                                onClick={() => {
+                                  if (tStatus === "Assigned" || tStatus === "Accepted") {
+                                    handleSingleLeadTakingAction(l, "IN_PROGRESS");
+                                  }
+                                  setViewLead(l);
+                                }}
+                              >
+                                Details
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs font-bold gradient-brand text-white px-2.5 shadow-xs"
+                                onClick={() => {
+                                  if (tStatus === "Assigned" || tStatus === "Accepted") {
+                                    handleSingleLeadTakingAction(l, "IN_PROGRESS");
+                                  }
+                                  setActive(l);
+                                }}
+                              >
+                                Outcome
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {filteredQueueLeads.length === 0 && (
+                <p className="text-center py-8 text-xs text-muted-foreground">
+                  No leads found matching the selected filter.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* ── VIEW TAB 3: Completed Leads Grid ── */}
+          {(viewTab === "completed" || (viewTab === "current" && stats.called > 0)) && (
             <div className="mt-8">
               <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Completed Leads in Queue ({stats.called})
@@ -841,6 +1166,8 @@ function LeadCard({
   onOutOfService,
   onInterested,
   onDiary,
+  onAccept,
+  onStartWorking,
 }: {
   lead: Lead;
   followUp?: { date: string; time: string | null };
@@ -851,6 +1178,8 @@ function LeadCard({
   onOutOfService: () => void;
   onInterested: () => void;
   onDiary: () => void;
+  onAccept?: () => void;
+  onStartWorking?: () => void;
 }) {
   const initials = lead.customer_name
     .split(" ")
@@ -860,6 +1189,7 @@ function LeadCard({
 
   const inDiary = isDiaryLead(lead.notes);
   const diaryMeta = parseDiaryData(lead.notes);
+  const takingStatus = lead.taking_status || "Assigned";
 
   return (
     <div className="relative overflow-hidden rounded-2xl border bg-card p-5 shadow-lg card-elevated border-brand/30">
@@ -874,6 +1204,7 @@ function LeadCard({
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-lg font-extrabold text-foreground">{lead.customer_name}</p>
               <LeadStatusBadge status={lead.status} />
+              <LeadTakingBadge status={takingStatus} />
               {inDiary && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30 px-2.5 py-0.5 text-xs font-bold shadow-xs">
                   <BookOpen className="h-3 w-3" />
@@ -887,6 +1218,28 @@ function LeadCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {takingStatus === "Assigned" && onAccept && (
+            <Button
+              size="sm"
+              disabled={isBusy}
+              onClick={onAccept}
+              className="h-9 px-3.5 font-bold bg-sky-500 hover:bg-sky-600 text-white shadow-sm gap-1.5"
+            >
+              <UserCheck className="h-4 w-4" /> Accept Lead
+            </Button>
+          )}
+
+          {takingStatus === "Accepted" && onStartWorking && (
+            <Button
+              size="sm"
+              disabled={isBusy}
+              onClick={onStartWorking}
+              className="h-9 px-3.5 font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm gap-1.5"
+            >
+              <Play className="h-4 w-4" /> Start Working
+            </Button>
+          )}
+
           <Button
             size="sm"
             disabled={isBusy}

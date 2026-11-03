@@ -372,6 +372,67 @@ export type Database = {
           },
         ]
       }
+      lead_taking_logs: {
+        Row: {
+          action: string
+          company_id: string
+          created_at: string
+          employee_id: string
+          folder_id: string | null
+          id: string
+          lead_id: string
+          new_status: string | null
+          notes: string | null
+          prev_status: string | null
+        }
+        Insert: {
+          action: string
+          company_id: string
+          created_at?: string
+          employee_id: string
+          folder_id?: string | null
+          id?: string
+          lead_id: string
+          new_status?: string | null
+          notes?: string | null
+          prev_status?: string | null
+        }
+        Update: {
+          action?: string
+          company_id?: string
+          created_at?: string
+          employee_id?: string
+          folder_id?: string | null
+          id?: string
+          lead_id?: string
+          new_status?: string | null
+          notes?: string | null
+          prev_status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_taking_logs_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_taking_logs_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_taking_logs_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           alternate_mobile: string | null
@@ -403,6 +464,11 @@ export type Database = {
           source: string | null
           state: string | null
           status: Database["public"]["Enums"]["lead_status"]
+          taking_status: "Assigned" | "Accepted" | "In Progress" | "Completed" | "Follow-up Required" | null
+          accepted_at: string | null
+          started_working_at: string | null
+          completed_at: string | null
+          last_action_at: string | null
           updated_at: string
         }
         Insert: {
@@ -435,6 +501,11 @@ export type Database = {
           source?: string | null
           state?: string | null
           status?: Database["public"]["Enums"]["lead_status"]
+          taking_status?: "Assigned" | "Accepted" | "In Progress" | "Completed" | "Follow-up Required" | null
+          accepted_at?: string | null
+          started_working_at?: string | null
+          completed_at?: string | null
+          last_action_at?: string | null
           updated_at?: string
         }
         Update: {
@@ -467,6 +538,11 @@ export type Database = {
           source?: string | null
           state?: string | null
           status?: Database["public"]["Enums"]["lead_status"]
+          taking_status?: "Assigned" | "Accepted" | "In Progress" | "Completed" | "Follow-up Required" | null
+          accepted_at?: string | null
+          started_working_at?: string | null
+          completed_at?: string | null
+          last_action_at?: string | null
           updated_at?: string
         }
         Relationships: [

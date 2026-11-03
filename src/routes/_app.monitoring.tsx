@@ -41,6 +41,7 @@ import { useAgents, useCrmSession } from "@/hooks/use-crm-session";
 import { CONTACTED_STATUSES, LEAD_STATUSES, LOAN_TYPES, formatDateTime, inr, todayISO, type Lead } from "@/lib/crm";
 import { cn } from "@/lib/utils";
 import { exportToExcel, exportToCsv } from "@/lib/export-utils";
+import { LeadTakingDashboard } from "@/components/crm/LeadTakingDashboard";
 
 export const Route = createFileRoute("/_app/monitoring")({
   head: () => ({
@@ -80,6 +81,27 @@ function Monitoring() {
   const [typeFilter, setTypeFilter] = useState<string>(ALL);
   const [importOpen, setImportOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const [activeTab, setActiveTab] = useState<"calls" | "taking">(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search).get("tab");
+      if (p === "taking") return "taking";
+    }
+    return "calls";
+  });
+
+  const handleTabChange = (t: "calls" | "taking") => {
+    setActiveTab(t);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (t === "taking") {
+        url.searchParams.set("tab", "taking");
+      } else {
+        url.searchParams.delete("tab");
+      }
+      window.history.replaceState({}, "", url.toString());
+    }
+  };
 
   const { data: agents = [] } = useAgents(companyId, isAdmin);
 
@@ -374,6 +396,49 @@ function Monitoring() {
         }
       />
 
+      {/* ── Mode Switcher: Call Monitoring vs Lead Taking Tracker ── */}
+      <div className="flex items-center gap-2 border-b border-border/60 pb-2">
+        <button
+          type="button"
+          onClick={() => handleTabChange("calls")}
+          className={cn(
+            "flex items-center gap-2 rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all",
+            activeTab === "calls"
+              ? "gradient-brand text-white shadow-md shadow-brand/20"
+              : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          )}
+        >
+          <Activity className="h-4 w-4" />
+          <span>Live Calling Activity</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange("taking")}
+          className={cn(
+            "flex items-center gap-2 rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all",
+            activeTab === "taking"
+              ? "gradient-brand text-white shadow-md shadow-brand/20"
+              : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          )}
+        >
+          <UserCheck className="h-4 w-4" />
+          <span>Lead Taking Tracker</span>
+          <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider">
+            Live
+          </span>
+        </button>
+      </div>
+
+      {activeTab === "taking" && companyId && (
+        <LeadTakingDashboard
+          companyId={companyId}
+          defaultFolderDate={!allDates && date ? date : undefined}
+        />
+      )}
+
+      {activeTab === "calls" && (
+        <>
       {/* ── Clickable Date Filters Bar ── */}
       <div className="rounded-2xl border bg-card p-4 shadow-sm card-elevated space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -821,6 +886,8 @@ function Monitoring() {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* ── Import / Create Date Folder Wizard ── */}
       <ImportLeadsWizard

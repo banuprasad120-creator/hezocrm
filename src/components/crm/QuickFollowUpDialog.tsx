@@ -28,6 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useCrmSession } from "@/hooks/use-crm-session";
 import { addDaysISO, inr, todayISO, type Lead } from "@/lib/crm";
 import { playFollowUpChime } from "@/lib/notification-sound";
+import { recordLeadTakingAction } from "@/lib/lead-taking";
 
 interface QuickFollowUpDialogProps {
   lead: Lead | null;
@@ -87,12 +88,28 @@ export function QuickFollowUpDialog({
 
       if (fuErr) throw fuErr;
 
-      // 2. Update lead status to Follow-up
+      // 2. Update lead status to Follow-up and taking_status
       await supabase.from("leads")
-        .update({ status: "Follow-up", last_call_at: new Date().toISOString() })
+        .update({
+          status: "Follow-up",
+          taking_status: "Follow-up Required",
+          last_action_at: new Date().toISOString(),
+          last_call_at: new Date().toISOString(),
+        })
         .eq("id", lead.id);
 
-      // 3. Insert into call_history for complete audit trail
+      // 3. Record lead taking audit action
+      if (empId) {
+        await recordLeadTakingAction({
+          companyId: lead.company_id,
+          employeeId: empId,
+          leadIds: [lead.id],
+          action: "FOLLOW_UP_REQUIRED",
+          notes: `📅 Scheduled follow-up on ${date}${time ? ` at ${time}` : ""}${notes ? `: ${notes.trim()}` : ""}`,
+        }).catch((e) => console.warn("Failed to record lead taking action:", e));
+      }
+
+      // 4. Insert into call_history for complete audit trail
       if (empId) {
         await supabase.from("call_history").insert({
           company_id: lead.company_id,
@@ -109,7 +126,7 @@ export function QuickFollowUpDialog({
         description: `Alarm will sound on ${date}${time ? ` at ${time}` : ""}.`,
       });
 
-      // 4. Invalidate all relevant queries
+      // 5. Invalidate all relevant queries
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["follow-ups"] }),
         qc.invalidateQueries({ queryKey: ["my-followups-open"] }),
@@ -119,6 +136,8 @@ export function QuickFollowUpDialog({
         qc.invalidateQueries({ queryKey: ["my-leads"] }),
         qc.invalidateQueries({ queryKey: ["daily-leads"] }),
         qc.invalidateQueries({ queryKey: ["call-history", lead.id] }),
+        qc.invalidateQueries({ queryKey: ["lead-taking-summary"] }),
+        qc.invalidateQueries({ queryKey: ["lead-taking-logs"] }),
       ]);
 
       resetForm();

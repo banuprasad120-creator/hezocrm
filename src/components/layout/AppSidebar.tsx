@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, PhoneCall, CalendarClock, Activity,
   BarChart3, Settings, UserCircle2, FolderPlus, ListChecks,
   Building2, IdCard, FolderKanban, ArrowLeftRight, Flame, Plus, UserPlus, BookOpen,
-  Trash2,
+  Trash2, UserCheck,
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { cn } from "@/lib/utils";
@@ -26,6 +26,7 @@ const adminGroups: NavGroup[] = [
     items: [
       { to: "/dashboard", title: "Dashboard", icon: LayoutDashboard },
       { to: "/monitoring", title: "Live Monitoring", icon: Activity },
+      { to: "/monitoring?tab=taking", title: "Lead Taking Tracker", icon: UserCheck },
       { to: "/analytics", title: "Analytics", icon: BarChart3 },
     ],
   },
@@ -81,7 +82,14 @@ export function AppSidebar() {
   const { state, setOpenMobile } = useSidebar();
   const collapsed = state === "collapsed";
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const isActive = (p: string) => pathname === p || pathname.startsWith(p + "/");
+  const searchStr = useRouterState({ select: (s) => s.location.searchStr });
+  const isActive = (p: string) => {
+    if (p.includes("?")) {
+      const [base, query] = p.split("?");
+      return pathname === base && searchStr.includes(query);
+    }
+    return (pathname === p || pathname.startsWith(p + "/")) && !searchStr.includes("tab=taking");
+  };
   const { data: session, isLoading: sessionLoading } = useCrmSession();
   const groups = sessionLoading ? [] : session?.isAdmin ? adminGroups : agentGroups;
   const closeMobile = () => setOpenMobile(false);
